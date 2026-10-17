@@ -16,10 +16,10 @@ const RULES_MAX_CHARS = 5200
 const SKILL_FILE = path.join(import.meta.dirname, '..', 'skills', 'nursery', 'SKILL.md')
 const TOOL_ONLY = ['.claude', 'EnterWorktree', 'ExitWorktree']
 const FOREIGN_TERMS = {
-  claude: ['Codex', 'OpenAI', 'Gemini', 'opencode'],
+  claude: ['Codex', 'OpenAI', 'Gemini', 'Google', 'opencode'],
   codex: ['Claude', 'Anthropic', 'Gemini', 'Google', 'opencode', ...TOOL_ONLY],
   gemini: ['Claude', 'Anthropic', 'Codex', 'OpenAI', 'opencode', ...TOOL_ONLY],
-  opencode: ['Claude', 'Anthropic', 'Codex', 'OpenAI', 'Gemini', ...TOOL_ONLY],
+  opencode: ['Claude', 'Anthropic', 'Codex', 'OpenAI', 'Gemini', 'Google', ...TOOL_ONLY],
 } as const
 const OWN_NAME = { claude: 'Claude', codex: 'Codex', gemini: 'Gemini', opencode: 'opencode' } as const
 const CONVERTERS = {
@@ -141,6 +141,9 @@ test('each agent only sees its own tool in the rules, subagents and skill', asyn
     const rendered = agents.renderForAgent(rules, agent)
     assertNoForeignTerms(rendered, agent, 'rules')
     assert.match(rendered, new RegExp(`\\b${OWN_NAME[agent]}\\b`), `rules for ${agent} do not name it`)
+    const traceLines = rendered.split('\n').filter((line) => line.includes('Cero rastro'))
+    assert.equal(traceLines.length, 1, `rules for ${agent} have ${traceLines.length} no-trace lines`)
+    assert.match(traceLines[0] ?? '', new RegExp(`\\b${OWN_NAME[agent]}\\b`), `no-trace rule for ${agent} does not name it`)
     for (const subagent of loaded) assertNoForeignTerms(CONVERTERS[agent](subagent.text, subagent.name), agent, `subagent ${subagent.name}`)
     assertNoForeignTerms(agents.renderForAgent(skill, agent), agent, 'skill')
   }
