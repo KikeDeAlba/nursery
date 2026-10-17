@@ -13,6 +13,26 @@ const DESCRIPTION_MAX = 300
 const DESCRIPTIONS_TOTAL_MAX = 2500
 const BODY_MAX_LINES = 80
 const RULES_MAX_CHARS = 5200
+const SKILL_FILE = path.join(import.meta.dirname, '..', 'skills', 'nursery', 'SKILL.md')
+const TOOL_ONLY = ['.claude', 'EnterWorktree', 'ExitWorktree']
+const FOREIGN_TERMS = {
+  claude: ['Codex', 'OpenAI', 'Gemini', 'Google', 'opencode'],
+  codex: ['Claude', 'Anthropic', 'Gemini', 'Google', 'opencode', ...TOOL_ONLY],
+  gemini: ['Claude', 'Anthropic', 'Codex', 'OpenAI', 'opencode', ...TOOL_ONLY],
+  opencode: ['Claude', 'Anthropic', 'Codex', 'OpenAI', 'Gemini', 'Google', ...TOOL_ONLY],
+} as const
+const OWN_NAME = { claude: 'Claude', codex: 'Codex', gemini: 'Gemini', opencode: 'opencode' } as const
+const CONVERTERS = {
+  claude: (markdown: string) => agents.parseFrontmatter(agents.renderForAgent(markdown, 'claude')).body,
+  codex: agents.subagentForCodex,
+  gemini: agents.subagentForGemini,
+  opencode: agents.subagentForOpenCode,
+} as const
+
+function assertNoForeignTerms(text: string, agent: keyof typeof FOREIGN_TERMS, label: string): void {
+  const lower = text.toLowerCase()
+  for (const term of FOREIGN_TERMS[agent]) assert.ok(!lower.includes(term.toLowerCase()), `${label} for ${agent} mentions ${term}`)
+}
 
 async function loadAgents(): Promise<{ name: string; text: string; attributes: Record<string, string>; body: string }[]> {
   return Promise.all(
@@ -110,5 +130,21 @@ test('agents that change code know how to work as one part of a parallel task', 
   for (const agent of (await loadAgents()).filter((item) => ['developer', 'devops', 'qa-automation'].includes(item.name))) {
     assert.match(agent.body, /## Rama asignada/, agent.name)
     assert.match(agent.body, /sin push ni MR/, agent.name)
+  }
+})
+
+test('each agent only sees its own tool in the rules, subagents and skill', async () => {
+  const rules = await readFile(RULES_FILE, 'utf8')
+  const skill = await readFile(SKILL_FILE, 'utf8')
+  const loaded = await loadAgents()
+  for (const agent of ['claude', 'codex', 'gemini', 'opencode'] as const) {
+    const rendered = agents.renderForAgent(rules, agent)
+    assertNoForeignTerms(rendered, agent, 'rules')
+    assert.match(rendered, new RegExp(`\\b${OWN_NAME[agent]}\\b`), `rules for ${agent} do not name it`)
+    const traceLines = rendered.split('\n').filter((line) => line.includes('Cero rastro'))
+    assert.equal(traceLines.length, 1, `rules for ${agent} have ${traceLines.length} no-trace lines`)
+    assert.match(traceLines[0] ?? '', new RegExp(`\\b${OWN_NAME[agent]}\\b`), `no-trace rule for ${agent} does not name it`)
+    for (const subagent of loaded) assertNoForeignTerms(CONVERTERS[agent](subagent.text, subagent.name), agent, `subagent ${subagent.name}`)
+    assertNoForeignTerms(agents.renderForAgent(skill, agent), agent, 'skill')
   }
 })
