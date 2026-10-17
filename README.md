@@ -9,6 +9,9 @@ Claude Code, opencode, Codex y Gemini CLI.
   que una instalación limpia sigue tus reglas desde el primer mensaje.
 - **Nueve subagentes**, cada uno con una descripción corta para que el agente
   principal sepa solo cuándo delegarle, y un cuerpo con lo propio del rol.
+- **Delegación automática:** las reglas hacen que todo plan termine con una
+  tabla de pasos y agentes, y que al aprobarlo cada paso se delegue, en paralelo
+  cuando se puede.
 - **`/nursery`** encadena los subagentes para una feature, un bug, un cambio de
   infraestructura o un incidente.
 
@@ -65,7 +68,7 @@ porque un plugin no puede escribir en `CLAUDE.md`: para ellas hace falta
 | Descripción de cada subagente | Cuándo delegarle (≤ 300 caracteres) | Siempre, unos 600 tokens entre los nueve |
 | Cuerpo de cada subagente | Rol, pasos, límites y formato de entrega | Solo dentro del subagente, al llamarlo |
 | `skills/nursery` | `/nursery`: elige la cadena y pasa entregas entre agentes | Nada hasta que el usuario lo escribe |
-| Bloque de reglas | `rules/RULES.md` en la memoria global | Siempre, unos 1,200 tokens, en la conversación y en cada subagente |
+| Bloque de reglas | `rules/RULES.md` en la memoria global | Siempre, unos 1,400 tokens, en la conversación y en cada subagente |
 
 ## Subagentes
 
@@ -90,6 +93,44 @@ En opencode, Codex y Gemini, `model` no se traduce y se hereda el de la sesión;
 `effort` pasa a `model_reasoning_effort` en Codex, y `tools` a permisos o
 nombres de herramienta en cada uno.
 
+## Delegación automática
+
+La sección «Delegación» de las reglas está en la memoria global, así que también
+aplica en modo plan:
+
+1. El plan termina con una tabla: paso, agente, qué hace, de qué depende y qué
+   toca.
+2. Las partes que no dependen entre sí ni tocan los mismos archivos se marcan
+   para correr en paralelo, hasta 3 a la vez, aunque sean del mismo rol.
+3. Al aprobar el plan, cada paso se delega a su agente y los independientes se
+   lanzan juntos. Después siempre vienen `qa-automation` y `code-reviewer`, y
+   `security` si se toca IAM, red, secretos o pagos.
+
+Ejemplo: «las conexiones a la base se quedan abiertas y el proxy no las corta».
+
+| Paso | Agente | Qué hace | Depende de |
+|---|---|---|---|
+| 1 | `sre` | Confirma con métricas del proxy y de la base qué conexiones quedan abiertas | — |
+| 2a | `developer` | Pool con máximo, timeout de inactividad, vida por conexión y cierre en el shutdown | 1 |
+| 2b | `devops` | Timeout de clientes inactivos y tope de conexiones del RDS Proxy en el manifest | 1 |
+| 3 | `security` | Revisa el cambio de infraestructura | 2b |
+| 4 | `qa-automation` | Prueba de fuga de conexiones | 2a |
+| 5 | `code-reviewer` | Revisa todo antes de los MR | 3, 4 |
+
+2a y 2b corren en paralelo.
+
+Cuando dos partes en paralelo van en el mismo repo:
+
+- Cada una trabaja en su worktree, en una sub-rama `feature/<n>-<parte>` que nace
+  de la rama de la tarea.
+- Las sub-ramas son **solo locales**: el orquestador las mezcla en
+  `feature/<n>`, corre el gate y las borra.
+- Al remoto solo sube la rama de la tarea ya integrada, con un MR.
+- Si las partes van en repos distintos, cada una lleva su rama y su MR.
+
+Sigue siendo una instrucción para el modelo, no un mecanismo. Si alguna vez no
+delega, `/nursery` fuerza la cadena.
+
 ## `/nursery`
 
 ```
@@ -112,6 +153,7 @@ Los agentes se escriben en `src/agents/*.md`. Los fragmentos compartidos de
 | `stack-terraform` | Manifests, OIDC, bootstrap, nombres, gate | devops, security |
 | `ci` | Plantillas de GitLab, ramas y tags por ambiente, GitHub Actions | devops |
 | `observability` | Datadog, CloudWatch, logs estructurados | sre |
+| `branch` | Rama asignada y entrega como parte de una tarea en paralelo | developer, devops, qa-automation |
 | `handoff` | Formato de la entrega | todos |
 
 `pnpm build:agents` genera `agents/*.md`, que va versionado porque el
@@ -130,7 +172,9 @@ Las pruebas fallan si:
 - una descripción pasa de 300 caracteres, o todas juntas pasan de 2,500;
 - dos agentes comparten una frase disparadora;
 - un cuerpo pasa de 80 líneas o repite texto de `rules/RULES.md`;
-- el bloque de reglas pasa de 4,500 caracteres.
+- el bloque de reglas pasa de 5,200 caracteres, o su sección «Delegación» no nombra
+  a los nueve agentes;
+- developer, devops o qa-automation no saben entregar como parte (sin push ni MR).
 
 ## Licencia
 
