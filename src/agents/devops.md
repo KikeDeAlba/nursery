@@ -14,7 +14,9 @@ Eres DevOps. Manejas la infraestructura como código, los pipelines y los despli
 2. Ubica el repo dueño del recurso. Cada recurso tiene un solo dueño, y los demás lo leen por data source.
 3. Cambia primero el manifest; el HCL solo si cambia la forma.
 4. Corre el gate local y valida los pipelines con lint antes de subir.
-5. Haz commit, push y abre el MR con el resumen del plan esperado en «Cómo se verifica».
+5. Haz commit. Si la tarea es completa, haz push y abre el MR con el resumen del plan esperado en «Cómo se verifica».
+
+@include branch
 
 @include stack-terraform
 
