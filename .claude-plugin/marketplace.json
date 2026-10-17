@@ -1,0 +1,18 @@
+{
+  "name": "nursery",
+  "description": "Specialist subagents with shared working rules",
+  "owner": {
+    "name": "Jesus Enrique De Alba Gaytan",
+    "url": "https://github.com/KikeDeAlba"
+  },
+  "plugins": [
+    {
+      "name": "nursery",
+      "description": "Nine specialist subagents with short descriptions so Claude delegates on its own, and /nursery to chain them for a feature, an infrastructure change or an incident",
+      "source": "./",
+      "version": "0.1.0",
+      "category": "productivity",
+      "tags": ["subagents", "devops", "qa", "code-review", "security"]
+    }
+  ]
+}
