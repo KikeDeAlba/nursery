@@ -12,7 +12,7 @@ const EFFORTS = new Set(['low', 'medium', 'high', 'xhigh', 'max'])
 const DESCRIPTION_MAX = 300
 const DESCRIPTIONS_TOTAL_MAX = 2500
 const BODY_MAX_LINES = 80
-const RULES_MAX_CHARS = 4500
+const RULES_MAX_CHARS = 5200
 
 async function loadAgents(): Promise<{ name: string; text: string; attributes: Record<string, string>; body: string }[]> {
   return Promise.all(
@@ -94,5 +94,21 @@ test('the rules block stays inside its budget for every agent', async () => {
     assert.doesNotMatch(rendered, /:::/)
     if (agent === 'claude') assert.match(rendered, /EnterWorktree/)
     else assert.doesNotMatch(rendered, /EnterWorktree|ExitWorktree/)
+  }
+})
+
+test('the rules make the main thread delegate, in parallel when it can', async () => {
+  const rendered = agents.renderForAgent(await readFile(RULES_FILE, 'utf8'), 'claude')
+  const section = rendered.slice(rendered.indexOf('## Delegación'))
+  assert.ok(section.length > '## Delegación'.length)
+  for (const name of await agentNames()) assert.match(section, new RegExp(`\\b${name}\\b`), `${name} missing from the delegation rules`)
+  assert.match(section, /máximo 3/)
+  assert.match(section, /solo locales/)
+})
+
+test('agents that change code know how to work as one part of a parallel task', async () => {
+  for (const agent of (await loadAgents()).filter((item) => ['developer', 'devops', 'qa-automation'].includes(item.name))) {
+    assert.match(agent.body, /## Rama asignada/, agent.name)
+    assert.match(agent.body, /sin push ni MR/, agent.name)
   }
 })
