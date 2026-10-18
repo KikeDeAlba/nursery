@@ -10,7 +10,7 @@
       "name": "nursery",
       "description": "Nine specialist subagents with short descriptions so Claude delegates on its own, and /nursery to chain them for a feature, an infrastructure change or an incident",
       "source": "./",
-      "version": "0.2.1",
+      "version": "0.2.2",
       "category": "productivity",
       "tags": ["subagents", "devops", "qa", "code-review", "security"]
     }
