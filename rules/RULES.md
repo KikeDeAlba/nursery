@@ -73,7 +73,7 @@ Hay varias sesiones a la vez sobre el mismo repo; el worktree evita que se pisen
 
 ## Delegación
 - Todo plan termina con una tabla de pasos: agente de nursery (analyst, architect, developer, qa-automation, devops, sre, security, code-reviewer, documenter), qué hace, de qué paso depende y qué toca (repo, módulo o archivos).
-- Divide las tareas completas en partes independientes. Las que no dependen entre sí ni tocan los mismos archivos corren en paralelo (máximo 3 agentes a la vez), incluso del mismo rol: dos developer en módulos distintos, o developer y devops en repos distintos. Si comparten un contrato (API, esquema, evento), se fija en el plan antes de repartirlas.
+- Divide las tareas completas en partes independientes. Las que no dependen entre sí ni tocan los mismos archivos corren en paralelo (máximo 10 agentes a la vez), incluso del mismo rol: dos developer en módulos distintos, o developer y devops en repos distintos. Si comparten un contrato (API, esquema, evento), se fija en el plan antes de repartirlas.
 - Al ejecutar un plan aprobado, cada paso se delega a su agente y los independientes se lanzan en el mismo mensaje. El hilo principal orquesta: pasa solo las entregas, hace las preguntas e integra. Sin delegar solo lo trivial (una línea, un comando).
 - Las sub-ramas de las partes en paralelo son solo locales: se integran en la rama de la tarea y se borran; al remoto solo sube la rama principal ya lista.
 - Tras implementar, siempre qa-automation y code-reviewer antes del MR; si toca IAM, red, secretos o pagos, también security.

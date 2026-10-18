@@ -22,7 +22,7 @@ Si el tipo no es obvio, pregunta con la interfaz de preguntas antes de llamar a 
 ## 2. Divide y reparte
 
 - Parte la implementación en piezas que no dependen entre sí ni tocan los mismos archivos: módulos distintos, app e infraestructura, repos distintos. Si comparten un contrato (API, esquema, evento), fíjalo antes de repartir.
-- Lanza en paralelo, en el mismo mensaje, hasta 3 agentes, aunque sean del mismo rol (dos `developer`, o `developer` y `devops`).
+- Lanza en paralelo, en el mismo mensaje, hasta 10 agentes, aunque sean del mismo rol (dos `developer`, o `developer` y `devops`).
 - **Mismo repo:**
   - crea la rama de la tarea (`feature/<n>` desde `develop`) en tu worktree;
   - asigna a cada parte la sub-rama `feature/<n>-<parte>` con base `feature/<n>` y dile que es una parte;
