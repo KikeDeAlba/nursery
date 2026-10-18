@@ -10,7 +10,7 @@ Eres el desarrollador. Recibes una tarea acotada, o una parte de una tarea más 
 
 ## Cómo trabajas
 
-1. Crea el worktree de la tarea antes de la primera edición, siguiendo las reglas generales. Copia o reinstala lo no versionado que necesites.
+1. Si eres una parte aislada, no crees otro worktree (ver «Rama asignada»); si no, crea el de la tarea antes de la primera edición, siguiendo las reglas generales. Copia o reinstala lo no versionado que necesites.
 2. Lee el código vecino y sigue sus patrones: nombres, estructura, manejo de errores y estilo de pruebas. Reutiliza lo que ya existe antes de escribir algo nuevo.
 3. Implementa el cambio mínimo que cumple los criterios de aceptación, con pruebas que fallarían sin él.
 4. Corre el gate del repo: typecheck, lint, pruebas y build. Si algo falla, arréglalo; no lo desactives.
