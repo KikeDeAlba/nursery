@@ -59,7 +59,7 @@ posterior) con:
 /plugin install nursery --marketplace KikeDeAlba/nursery
 ```
 
-El plugin trae los subagentes y `/nursery`. Las reglas no viajan en el plugin,
+El plugin trae los subagentes, `/nursery` y un panel en vivo de subagentes. Las reglas no viajan en el plugin,
 porque un plugin no puede escribir en `CLAUDE.md`: para ellas hace falta
 `nursery setup`.
 
@@ -68,6 +68,7 @@ porque un plugin no puede escribir en `CLAUDE.md`: para ellas hace falta
 | Descripción de cada subagente | Cuándo delegarle (≤ 300 caracteres) | Siempre, unos 600 tokens entre los nueve |
 | Cuerpo de cada subagente | Rol, pasos, límites y formato de entrega | Solo dentro del subagente, al llamarlo |
 | `skills/nursery` | `/nursery`: elige la cadena y pasa entregas entre agentes | Nada hasta que el usuario lo escribe |
+| `hooks/` | Panel de subagentes (ver «Panel de subagentes») | Nunca: no agrega nada al prompt |
 | Bloque de reglas | `rules/RULES.md` en la memoria global | Siempre, unos 1,400 tokens, en la conversación y en cada subagente |
 
 ## Subagentes
@@ -131,6 +132,52 @@ Cuando dos partes en paralelo van en el mismo repo:
 Sigue siendo una instrucción para el modelo, no un mecanismo. Si alguna vez no
 delega, `/nursery` fuerza la cadena.
 
+## Panel de subagentes
+
+Al lanzarse un subagente se abre el panel «Subagentes». Es un mod de Claude
+Code: un módulo de hooks en `hooks/register.tsx`, declarado en
+`hooks/hooks.json`. Se instala con el plugin, sin nada extra.
+
+```
+Subagentes
+● developer       implementa endpoint   1m12s  14 herramientas
+  ✓ Read src/api/users.ts
+  … Bash npm test
+  » Las pruebas pasan, falta el lint
+✓ code-reviewer   revisa diff           0m48s   6 herramientas
+```
+
+Por cada agente muestra:
+
+- el rol (`nursery:developer` se ve como `developer`) y la descripción de la
+  tarea;
+- el estado: `●` corriendo, `✓` terminado, `✗` falló, `■` abortado;
+- el tiempo y el número de herramientas usadas (`herr.` si el panel es
+  angosto);
+- mientras corre, sus últimas 5 actividades, herramientas y texto mezclados en
+  orden: una herramienta con su argumento (`…` en curso, `✓` hecha, `✗`
+  falló; el comando de Bash, el archivo de Read, Edit o Write, el patrón de
+  Grep o Glob) o la primera línea de lo que dijo (`»`).
+
+Los agentes terminados quedan atenuados en una sola línea, sin actividad.
+
+Los subagentes que lanza otro subagente salen sangrados bajo su padre. El panel
+muestra todos los subagentes, no solo los de nursery.
+
+Cómo se usa:
+
+- Elegir un agente en el panel abre su transcript.
+- El panel se abre solo con el primer subagente de la sesión; si lo cierras,
+  no vuelve a abrirse solo.
+- `/nursery-panel` lo abre siempre.
+- En terminales de menos de unas 144 columnas el panel no se coloca solo. En su
+  lugar aparece una línea por agente corriendo encima del prompt:
+  `● developer · 1m12s · Bash npm test`.
+
+El panel no cuesta contexto: no agrega nada al prompt del modelo. Requiere una
+versión de Claude Code con soporte de mods (hooks modules); se probó con
+Claude Code 2.1.302 (`claude --version`).
+
 ## `/nursery`
 
 ```
@@ -175,6 +222,20 @@ Las pruebas fallan si:
 - el bloque de reglas pasa de 5,200 caracteres, o su sección «Delegación» no nombra
   a los nueve agentes;
 - developer, devops o qa-automation no saben entregar como parte (sin push ni MR).
+
+Para probar el panel de subagentes (`hooks/`):
+
+```sh
+claude plugin validate .
+claude plugin test .
+claude --plugin-dir .
+```
+
+- `claude plugin validate .` valida el plugin, incluido el módulo de hooks.
+- `claude plugin test .` corre las pruebas de `hooks/*.test.ts`. Son aparte de
+  `pnpm test`, que corre `test/*.spec.ts`; el sufijo distinto evita que
+  `claude plugin test` intente cargar las pruebas de node.
+- `claude --plugin-dir .` carga el plugin desde el checkout, sin instalarlo.
 
 ## Licencia
 

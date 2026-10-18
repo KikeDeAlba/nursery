@@ -1,6 +1,6 @@
 {
   "name": "@kikedealba/nursery",
-  "version": "0.2.3",
+  "version": "0.3.0",
   "description": "Specialist subagents and shared working rules for Claude Code, opencode, Codex and Gemini CLI.",
   "license": "MIT",
   "author": "Jesus Enrique De Alba Gaytan",
@@ -21,7 +21,8 @@
     "gemini-cli",
     "codex",
     "opencode",
-    "claude-code-plugin"
+    "claude-code-plugin",
+    "claude-code-mod"
   ],
   "type": "module",
   "packageManager": "pnpm@11.22.0",
@@ -37,6 +38,9 @@
     "agents",
     "rules",
     "skills",
+    "hooks",
+    "!hooks/*.test.ts",
+    "types",
     "README.md",
     "LICENSE"
   ],
@@ -48,7 +52,7 @@
     "build:agents": "node src/bin/nursery.ts build",
     "prepack": "pnpm build",
     "typecheck": "tsc --noEmit",
-    "test": "node --test \"test/**/*.test.ts\"",
+    "test": "node --test \"test/**/*.spec.ts\"",
     "nursery": "node src/bin/nursery.ts"
   },
   "dependencies": {
