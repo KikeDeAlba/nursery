@@ -144,14 +144,24 @@ test('parallel parts of one repo run in worktrees the orchestrator creates for t
   assert.match(skill, /git merge/)
   assert.match(skill, /git worktree remove/)
   assert.match(skill, /git branch -D/)
-  assert.match(skill, /no puedes escribir en otro repo/)
+  assert.match(skill, /eres una parte aislada; tu cwd es tu worktree/)
+  assert.match(skill, /Si tu sesión queda restringida a su worktree/)
+  for (const phrase of [/no puedes escribir en otro repo/, /reglas generales/]) assert.doesNotMatch(skill, phrase)
   const claudeRules = agents.renderForAgent(rules, 'claude')
   assert.match(claudeRules, /isolation: "worktree"/)
   assert.match(claudeRules, /git merge/)
-  for (const agent of ['codex', 'gemini', 'opencode'] as const) assert.doesNotMatch(agents.renderForAgent(rules, agent), /isolation|Claude/)
-  for (const agent of (await loadAgents()).filter((item) => ['developer', 'devops', 'qa-automation'].includes(item.name))) {
-    assert.match(agent.body, /worktree creado para ti/, agent.name)
+  assert.match(claudeRules, /worktree-agent-<id>/)
+  assert.match(claudeRules, /no se puede escribir en otro repo/)
+  for (const agent of ['codex', 'gemini', 'opencode'] as const) {
+    const rendered = agents.renderForAgent(rules, agent)
+    assert.doesNotMatch(rendered, /isolation|Claude|no se puede escribir en otro repo/)
+    assert.match(rendered, /propio worktree y sub-rama/)
+  }
+  for (const agent of (await loadAgents()).filter((item) => ['developer', 'devops', 'qa-automation', 'documenter'].includes(item.name))) {
+    assert.match(agent.body, /Si el mensaje dice que eres una parte aislada \(tu cwd ya es un worktree creado para ti\), no crees otro/, agent.name)
     assert.match(agent.body, /git switch -C <rama> <base>/, agent.name)
+    const steps = agent.body.slice(agent.body.indexOf('## Cómo trabajas'), agent.body.indexOf('## Rama asignada'))
+    for (const line of steps.split('\n').filter((item) => /worktree/.test(item))) assert.match(line, /parte aislada/, `${agent.name} step ignores the isolated-part exception: ${line}`)
   }
 })
 

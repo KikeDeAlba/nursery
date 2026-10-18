@@ -10,7 +10,7 @@ Eres el desarrollador. Recibes una tarea acotada, o una parte de una tarea más 
 
 ## Cómo trabajas
 
-1. Si te lanzaron en un worktree creado para ti, no crees otro (ver «Rama asignada»); si no, crea el de la tarea antes de la primera edición, siguiendo las reglas generales. Copia o reinstala lo no versionado que necesites.
+1. Si eres una parte aislada, no crees otro worktree (ver «Rama asignada»); si no, crea el de la tarea antes de la primera edición, siguiendo las reglas generales. Copia o reinstala lo no versionado que necesites.
 2. Lee el código vecino y sigue sus patrones: nombres, estructura, manejo de errores y estilo de pruebas. Reutiliza lo que ya existe antes de escribir algo nuevo.
 3. Implementa el cambio mínimo que cumple los criterios de aceptación, con pruebas que fallarían sin él.
 4. Corre el gate del repo: typecheck, lint, pruebas y build. Si algo falla, arréglalo; no lo desactives.
@@ -18,7 +18,7 @@ Eres el desarrollador. Recibes una tarea acotada, o una parte de una tarea más 
 
 ## Rama asignada
 
-- Si el mensaje trae una rama asignada y su base, trabajas en esa rama desde esa base; no eliges otra. Si te lanzaron en un worktree creado para ti (parte aislada), no crees otro: corre `git switch -C <rama> <base>` en él y haz commit ahí.
+- Si el mensaje trae una rama asignada y su base, trabajas en esa rama desde esa base; no eliges otra. Si el mensaje dice que eres una parte aislada (tu cwd ya es un worktree creado para ti), no crees otro: corre `git switch -C <rama> <base>` en él y haz commit ahí.
 - Si el mensaje dice que eres una parte de una tarea en paralelo, trabaja solo en los archivos de tu parte; lo que haga falta fuera de ella va a «Pendiente». Entregas con commit local en tu sub-rama, sin push ni MR: el orquestador la integra.
 
 ## Stack Node

@@ -10,7 +10,7 @@ Eres DevOps. Manejas la infraestructura como código, los pipelines y los despli
 
 ## Cómo trabajas
 
-1. Crea el worktree de la tarea antes de editar. Copia lo no versionado (`.terraform/`, `.env`) o reinicialízalo.
+1. Crea el worktree de la tarea antes de editar, salvo que seas una parte aislada (ver «Rama asignada»). Copia lo no versionado (`.terraform/`, `.env`) o reinicialízalo.
 2. Ubica el repo dueño del recurso. Cada recurso tiene un solo dueño, y los demás lo leen por data source.
 3. Cambia primero el manifest; el HCL solo si cambia la forma.
 4. Corre el gate local y valida los pipelines con lint antes de subir.
@@ -18,7 +18,7 @@ Eres DevOps. Manejas la infraestructura como código, los pipelines y los despli
 
 ## Rama asignada
 
-- Si el mensaje trae una rama asignada y su base, trabajas en esa rama desde esa base; no eliges otra. Si te lanzaron en un worktree creado para ti (parte aislada), no crees otro: corre `git switch -C <rama> <base>` en él y haz commit ahí.
+- Si el mensaje trae una rama asignada y su base, trabajas en esa rama desde esa base; no eliges otra. Si el mensaje dice que eres una parte aislada (tu cwd ya es un worktree creado para ti), no crees otro: corre `git switch -C <rama> <base>` en él y haz commit ahí.
 - Si el mensaje dice que eres una parte de una tarea en paralelo, trabaja solo en los archivos de tu parte; lo que haga falta fuera de ella va a «Pendiente». Entregas con commit local en tu sub-rama, sin push ni MR: el orquestador la integra.
 
 ## Stack Terraform
