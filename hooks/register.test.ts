@@ -40,7 +40,11 @@ const engine = (on: On, options: EngineOptions = {}) => {
 
     return { model: 'test-model', agentId: forced ?? `agent-${next}` }
   })
-  on('agent.list', () => ({ value: options.listed?.() ?? [] }))
+  on('agent.list', () => ({
+    value:
+      options.listed?.() ??
+      stored.map(({ id, type, description, status }) => ({ id, type, description, status })),
+  }))
   on('session.cwd', () => ({ value: '/repo' }))
   on('ui.open', (_$, e) => {
     opened.push(e.id)
@@ -70,12 +74,19 @@ const engine = (on: On, options: EngineOptions = {}) => {
 
 const agentsOf = (): readonly NurseryAgent[] => stored
 
-const spawn = ($: Engine, subagentType: string, description: string, parentAgentId?: string) =>
+const spawn = (
+  $: Engine,
+  subagentType: string,
+  description: string,
+  parentAgentId?: string,
+  resumeId?: string,
+) =>
   $.agent.spawn({
     prompt: 'do it',
     description,
     subagentType,
     ...(parentAgentId === undefined ? {} : { parentAgentId }),
+    ...(resumeId === undefined ? {} : { resume: { agentId: resumeId } }),
   } as Parameters<Engine['agent']['spawn']>[0])
 
 const callTool = ($: Engine, agentId: string, input: Record<string, unknown>) =>
@@ -90,6 +101,43 @@ const complete = ($: Engine, agentId: string, reason: 'answer' | 'error' | 'abor
     agentId,
     reason,
   })
+
+type Finder = {
+  findAll: (query: { type: string }) => Promise<readonly { props: Record<string, unknown> }[]>
+}
+
+const expectNoFill = async (ui: Finder) => {
+  for (const type of ['Box', 'Text', 'Button']) {
+    for (const found of await ui.findAll({ type })) {
+      expect(found.props['backgroundColor']).toBeUndefined()
+      expect(found.props['inverse']).toBeUndefined()
+    }
+  }
+}
+
+const PANE_BACKGROUND = '#1e1e1e'
+
+const expectPaneFrame = async (ui: Finder, height: number) => {
+  const [background, border] = await ui.findAll({ type: 'Box' })
+  expect(background?.props).toMatchObject({ backgroundColor: PANE_BACKGROUND, width: '100%', height })
+  expect(border?.props).toMatchObject({ borderStyle: 'round', borderColor: '#5a5a5a', paddingX: 1 })
+}
+
+const expectPaneColors = async (ui: Finder) => {
+  for (const text of await ui.findAll({ type: 'Text' })) {
+    expect(typeof text.props['color']).toBe('string')
+    expect(text.props['dimColor']).toBeUndefined()
+    expect(text.props['inverse']).toBeUndefined()
+    expect(text.props['backgroundColor']).toBeUndefined()
+  }
+  for (const button of await ui.findAll({ type: 'Button' })) {
+    expect(button.props['plain']).toBe(true)
+    expect(button.props['variant']).toBeUndefined()
+    expect(button.props['backgroundColor']).toBeUndefined()
+  }
+  const filled = (await ui.findAll({ type: 'Box' })).filter(box => box.props['backgroundColor'] !== undefined)
+  expect(filled.map(box => box.props['backgroundColor'])).toEqual([PANE_BACKGROUND])
+}
 
 const paneProps = {
   title: 'Subagentes',
@@ -246,6 +294,8 @@ describe('nursery subagent panel', () => {
       })
 
       expect(await ui.find({ type: 'Text', text: /Ningún subagente/ })).toBeDefined()
+      await expectPaneFrame(ui, SCROLL.bodyRows)
+      await expectPaneColors(ui)
       await ui.unmount()
     })
 
@@ -273,6 +323,8 @@ describe('nursery subagent panel', () => {
       expect(rows[1]?.text).toMatch(/✓ code-reviewer\s+revisa diff\s+0m48s\s+0 herramientas/)
       expect(rows[0]?.text).not.toContain('nursery:')
       expect(await ui.find({ type: 'Text', text: /✓ Read src\/api\/users\.ts/ })).toBeDefined()
+      await expectPaneFrame(ui, SCROLL.bodyRows)
+      await expectPaneColors(ui)
       await ui.unmount()
     })
 
@@ -311,6 +363,8 @@ describe('nursery subagent panel', () => {
       })
 
       expect(await ui.find({ type: 'Text', text: '● developer · 1m12s · Bash npm test' })).toBeDefined()
+      expect((await ui.findAll({ type: 'Box' })).some(box => box.props['borderStyle'] !== undefined)).toBe(false)
+      await expectNoFill(ui)
       await ui.unmount()
     })
 
@@ -435,7 +489,7 @@ describe('nursery subagent panel', () => {
     expect(agentsOf()[0]).toMatchObject({ status: 'completed', endedAt: 1_000 })
     await clock.advance(5_000)
 
-    await spawn($, 'developer', 'algo otra vez')
+    await spawn($, 'developer', 'algo otra vez', undefined, 'agent-1')
 
     const list = agentsOf()
     expect(list).toHaveLength(1)
@@ -443,6 +497,19 @@ describe('nursery subagent panel', () => {
     expect(list[0]?.endedAt).toBeUndefined()
     expect(list[0]?.startedAt).toBe(1_000)
     expect(list[0]?.description).toBe('algo')
+  })
+
+  test('a spawn without resume does not reopen an ended agent', async ($, on) => {
+    const { clock } = engine(on, { spawnIds: ['agent-1', 'agent-1'] })
+    await spawn($, 'developer', 'algo')
+    await complete($, 'agent-1')
+    await clock.advance(5_000)
+
+    await spawn($, 'developer', 'algo otra vez')
+
+    const list = agentsOf()
+    expect(list).toHaveLength(1)
+    expect(list[0]).toMatchObject({ status: 'completed', endedAt: 1_000, description: 'algo' })
   })
 
   test('an aborted turn marks the agent killed', async ($, on) => {
@@ -550,6 +617,97 @@ describe('nursery subagent panel', () => {
     expect(agentsOf()[0]?.status).toBe('failed')
   })
 
+  test('a running agent missing from the list once stays running', async ($, on) => {
+    let isListed = true
+    const { clock } = engine(on, {
+      listed: () =>
+        isListed ? [{ id: 'agent-1', type: 'developer', description: 'algo', status: 'running' }] : [],
+    })
+    await spawn($, 'developer', 'algo')
+    await clock.advance(30_000)
+    isListed = false
+
+    await clock.advance(5_000)
+
+    expect(agentsOf()[0]?.status).toBe('running')
+    expect(agentsOf()[0]?.endedAt).toBeUndefined()
+  })
+
+  test('an old running agent missing from the list twice is marked completed', async ($, on) => {
+    let isListed = true
+    const { clock } = engine(on, {
+      listed: () =>
+        isListed ? [{ id: 'agent-1', type: 'developer', description: 'algo', status: 'running' }] : [],
+    })
+    await spawn($, 'developer', 'algo')
+    await clock.advance(30_000)
+    isListed = false
+
+    await clock.advance(10_000)
+
+    expect(agentsOf()[0]).toMatchObject({ status: 'completed', endedAt: 41_000 })
+  })
+
+  test('a freshly spawned agent missing from the list stays running', async ($, on) => {
+    const { clock } = engine(on, { listed: () => [] })
+    await spawn($, 'developer', 'algo')
+
+    await clock.advance(30_000)
+
+    expect(agentsOf()[0]?.status).toBe('running')
+  })
+
+  test('an agent that reappears in the list loses its absence mark', async ($, on) => {
+    let isListed = true
+    const { clock } = engine(on, {
+      listed: () =>
+        isListed ? [{ id: 'agent-1', type: 'developer', description: 'algo', status: 'running' }] : [],
+    })
+    await spawn($, 'developer', 'algo')
+    await clock.advance(30_000)
+    isListed = false
+    await clock.advance(5_000)
+    isListed = true
+    await clock.advance(5_000)
+    isListed = false
+
+    await clock.advance(5_000)
+
+    expect(agentsOf()[0]?.status).toBe('running')
+  })
+
+  test('a failing agent list changes nothing', async ($, on) => {
+    const { clock } = engine(on, {
+      listed: () => {
+        throw new Error('list down')
+      },
+    })
+    await spawn($, 'developer', 'algo')
+
+    await clock.advance(60_000)
+
+    expect(agentsOf()[0]?.status).toBe('running')
+  })
+
+  test('the timer stops once no agent is running', async ($, on) => {
+    let calls = 0
+    const { clock } = engine(on, {
+      listed: () => {
+        calls += 1
+
+        return []
+      },
+    })
+    await spawn($, 'developer', 'algo')
+    await clock.advance(40_000)
+    expect(agentsOf()[0]?.status).toBe('completed')
+    const seen = calls
+
+    await clock.advance(60_000)
+
+    expect(calls).toBe(seen)
+  })
+
   test('the pane opens by itself only once per session', async ($, on) => {
     const { opened } = engine(on)
 
@@ -583,5 +741,270 @@ describe('nursery subagent panel', () => {
 
     expect((await ui.find({ type: 'Button' }))?.text).toMatch(/0 herr\./)
     await ui.unmount()
+  })
+
+  test('a resume of an agent the store did not know creates it as running', async ($, on) => {
+    engine(on, { spawnIds: ['agent-9'] })
+
+    await spawn($, 'developer', 'retomado', undefined, 'agent-9')
+
+    expect(agentsOf()).toHaveLength(1)
+    expect(agentsOf()[0]).toMatchObject({ id: 'agent-9', status: 'running', description: 'retomado' })
+    expect(agentsOf()[0]?.endedAt).toBeUndefined()
+  })
+
+  test('a resume ignores an ending recorded before the spawn', async ($, on) => {
+    engine(on, { spawnIds: ['agent-1'] })
+    await complete($, 'agent-1')
+
+    await spawn($, 'developer', 'retomado', undefined, 'agent-1')
+
+    expect(agentsOf()[0]?.status).toBe('running')
+    expect(agentsOf()[0]?.endedAt).toBeUndefined()
+  })
+
+  test('a spawn without resume of a running agent keeps it running', async ($, on) => {
+    engine(on, { spawnIds: ['agent-1', 'agent-1'] })
+    await spawn($, 'developer', 'algo')
+    await callTool($, 'agent-1', { tool: 'Grep', pattern: 'x' })
+
+    await spawn($, 'developer', 'otra')
+
+    expect(agentsOf()).toHaveLength(1)
+    expect(agentsOf()[0]).toMatchObject({ status: 'running', toolCount: 1, description: 'algo' })
+  })
+
+  test('an agent absent exactly at the grace limit stays running', async ($, on) => {
+    const { clock } = engine(on, { listed: () => [] })
+    await spawn($, 'developer', 'algo')
+
+    await clock.advance(30_000)
+    expect(agentsOf()[0]?.status).toBe('running')
+    await clock.advance(5_000)
+
+    expect(agentsOf()[0]).toMatchObject({ status: 'completed', endedAt: 36_000 })
+  })
+
+  test('an agent alternating present and absent is never closed', async ($, on) => {
+    let isListed = true
+    const { clock } = engine(on, {
+      listed: () =>
+        isListed ? [{ id: 'agent-1', type: 'developer', description: 'algo', status: 'running' }] : [],
+    })
+    await spawn($, 'developer', 'algo')
+    await clock.advance(30_000)
+
+    for (let n = 0; n < 4; n += 1) {
+      isListed = false
+      await clock.advance(5_000)
+      isListed = true
+      await clock.advance(5_000)
+    }
+
+    expect(agentsOf()[0]?.status).toBe('running')
+    expect(agentsOf()[0]?.endedAt).toBeUndefined()
+  })
+
+  test('an agent ended by its turn is not touched by later absences', async ($, on) => {
+    const { clock } = engine(on, { listed: () => [] })
+    await spawn($, 'developer', 'algo')
+    await clock.advance(5_000)
+    await complete($, 'agent-1', 'aborted')
+
+    await clock.advance(60_000)
+
+    expect(agentsOf()[0]).toMatchObject({ status: 'killed', endedAt: 6_000 })
+  })
+
+  test('a failing agent list does not count as a second absence', async ($, on) => {
+    let mode: 'absent' | 'down' = 'absent'
+    const { clock } = engine(on, {
+      listed: () => {
+        if (mode === 'down') throw new Error('list down')
+
+        return []
+      },
+    })
+    await spawn($, 'developer', 'algo')
+    await clock.advance(30_000)
+    mode = 'down'
+    await clock.advance(30_000)
+
+    expect(agentsOf()[0]?.status).toBe('running')
+    expect(agentsOf()[0]?.endedAt).toBeUndefined()
+  })
+
+  test('a resumed agent gets a fresh grace before an absence closes it', async ($, on) => {
+    const { clock } = engine(on, { spawnIds: ['agent-1', 'agent-1'], listed: () => [] })
+    await spawn($, 'developer', 'algo')
+    await clock.advance(55_000)
+    await complete($, 'agent-1')
+    await spawn($, 'developer', 'otra vez', undefined, 'agent-1')
+
+    await clock.advance(20_000)
+
+    expect(agentsOf()[0]).toMatchObject({ status: 'running', startedAt: 1_000, resumedAt: 56_000 })
+
+    await clock.advance(20_000)
+
+    expect(agentsOf()[0]?.status).toBe('completed')
+  })
+
+  test('an agent resumed after an absence mark is not closed by the next reconcile', async ($, on) => {
+    let isListed = true
+    const { clock } = engine(on, {
+      spawnIds: ['agent-1', 'agent-1'],
+      listed: () =>
+        isListed ? [{ id: 'agent-1', type: 'developer', description: 'algo', status: 'running' }] : [],
+    })
+    await spawn($, 'developer', 'algo')
+    await clock.advance(30_000)
+    isListed = false
+    await clock.advance(5_000)
+    await complete($, 'agent-1')
+    await spawn($, 'developer', 'otra vez', undefined, 'agent-1')
+
+    await clock.advance(5_000)
+
+    expect(agentsOf()[0]?.status).toBe('running')
+  })
+
+  test('absent, then a failing list, then absent again closes an old agent', async ($, on) => {
+    let mode: 'present' | 'absent' | 'down' = 'present'
+    const { clock } = engine(on, {
+      listed: () => {
+        if (mode === 'down') throw new Error('list down')
+
+        return mode === 'present'
+          ? [{ id: 'agent-1', type: 'developer', description: 'algo', status: 'running' }]
+          : []
+      },
+    })
+    await spawn($, 'developer', 'algo')
+    await clock.advance(30_000)
+    mode = 'absent'
+    await clock.advance(5_000)
+    mode = 'down'
+    await clock.advance(5_000)
+    expect(agentsOf()[0]?.status).toBe('running')
+    mode = 'absent'
+
+    await clock.advance(5_000)
+
+    expect(agentsOf()[0]).toMatchObject({ status: 'completed', endedAt: 46_000 })
+  })
+
+  test('activity lines are truncated instead of wrapping', async ($, on) => {
+    engine(on)
+    await spawn($, 'developer', 'algo')
+    await callTool($, 'agent-1', { tool: 'Grep', pattern: 'x'.repeat(200) })
+
+    const ui = await $.ui.mount({
+      plugin: 'nursery',
+      surface: 'terminal',
+      component: 'Pane',
+      requestId: PANE,
+      props: paneProps,
+      viewport: { columns: 120, rows: 40 },
+    })
+
+    expect((await ui.find({ type: 'Text', text: /Grep x+/ }))?.props['wrap']).toBe('truncate')
+    await ui.unmount()
+  })
+
+  test('a very narrow pane keeps the 44 column minimum', async ($, on) => {
+    engine(on)
+    await spawn($, 'developer', 'una descripción bastante larga para el panel')
+
+    const ui = await $.ui.mount({
+      plugin: 'nursery',
+      surface: 'terminal',
+      component: 'Pane',
+      requestId: PANE,
+      props: { ...paneProps, bodyColumns: 20 },
+      viewport: { columns: 20, rows: 40 },
+    })
+
+    const row = await ui.find({ type: 'Button' })
+    expect(row?.text).toMatch(/0 herr\./)
+    expect(row?.text).toContain('una des…')
+    await ui.unmount()
+  })
+
+  describe('pane row clipping inside the border', () => {
+    const mountPane = async ($: Engine, bodyRows: number, rows: number) =>
+      $.ui.mount({
+        plugin: 'nursery',
+        surface: 'terminal',
+        component: 'Pane',
+        requestId: PANE,
+        props: { ...paneProps, scroll: { offset: 0, bodyRows } },
+        viewport: { columns: 120, rows },
+      })
+
+    const spawnMany = async ($: Engine, count: number) => {
+      for (let n = 1; n <= count; n += 1) await spawn($, 'developer', `tarea ${n}`)
+    }
+
+    test('rows that fit exactly are all shown without a counter', async ($, on) => {
+      engine(on)
+      await spawnMany($, 5)
+
+      const ui = await mountPane($, 8, 40)
+
+      expect(await ui.findAll({ type: 'Button' })).toHaveLength(5)
+      expect(await ui.find({ type: 'Text', text: /más/ })).toBeUndefined()
+      await ui.unmount()
+    })
+
+    test('one row over drops rows so title, counter and border fit the body', async ($, on) => {
+      engine(on)
+      await spawnMany($, 6)
+
+      const ui = await mountPane($, 8, 40)
+
+      expect(await ui.findAll({ type: 'Button' })).toHaveLength(4)
+      expect(await ui.find({ type: 'Text', text: '+2 más' })).toBeDefined()
+      await expectPaneFrame(ui, 8)
+      await ui.unmount()
+    })
+
+    test('activity rows count toward the room', async ($, on) => {
+      engine(on)
+      await spawnMany($, 2)
+      await callTool($, 'agent-1', { tool: 'Grep', pattern: 'a' })
+      await callTool($, 'agent-1', { tool: 'Grep', pattern: 'b' })
+      await callTool($, 'agent-1', { tool: 'Grep', pattern: 'c' })
+      await callTool($, 'agent-1', { tool: 'Grep', pattern: 'd' })
+      await callTool($, 'agent-1', { tool: 'Grep', pattern: 'e' })
+
+      const ui = await mountPane($, 8, 40)
+
+      expect(await ui.findAll({ type: 'Button' })).toHaveLength(1)
+      expect(await ui.find({ type: 'Text', text: /\+\d+ más/ })).toBeDefined()
+      await ui.unmount()
+    })
+
+    test('without body rows the viewport height decides the room', async ($, on) => {
+      engine(on)
+      await spawnMany($, 6)
+
+      const ui = await mountPane($, 0, 12)
+
+      expect(await ui.findAll({ type: 'Button' })).toHaveLength(4)
+      expect(await ui.find({ type: 'Text', text: '+2 más' })).toBeDefined()
+      await ui.unmount()
+    })
+
+    test('a tiny viewport still shows one row and the counter', async ($, on) => {
+      engine(on)
+      await spawnMany($, 4)
+
+      const ui = await mountPane($, 1, 3)
+
+      expect(await ui.findAll({ type: 'Button' })).toHaveLength(1)
+      expect(await ui.find({ type: 'Text', text: '+3 más' })).toBeDefined()
+      await ui.unmount()
+    })
   })
 })

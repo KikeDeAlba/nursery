@@ -1,5 +1,5 @@
 import { atom, read, update } from 'claude-code'
-import type { AgentInfo, AgentStatus, EngineInterface, Register, Timer } from 'claude-code'
+import type { AgentInfo, AgentStatus, EngineInterface, Register, RenderNode, Timer } from 'claude-code'
 
 import type { NurseryActivity, NurseryAgent, NurseryAgentStatus } from '../types'
 
@@ -13,7 +13,12 @@ const TYPE_WIDTH = 15
 const TICK_MS = 1000
 const RECONCILE_EVERY = 5
 const MAX_ENDED_EARLY = 50
+const ABSENT_GRACE_MS = 30_000
 const WIDE_COLUMNS = 80
+const FRAME_ROWS = 2
+const MIN_PANE_ROWS = 4
+const MIN_PANE_COLUMNS = 44
+const FRAME_COLUMNS = 4
 const NURSERY_PREFIX = 'nursery:'
 
 const agents = atom({ plugin: 'nursery', key: 'agents' } as const, [])
@@ -56,6 +61,23 @@ const STATUS_COLOR: Readonly<Record<NurseryAgentStatus, string>> = {
   killed: 'inactive',
 }
 
+const PANE_COLOR = {
+  background: '#1e1e1e',
+  text: '#d4d4d4',
+  muted: '#8a8a8a',
+  accent: '#e5a050',
+  error: '#f07070',
+  success: '#6ccf8a',
+  border: '#5a5a5a',
+} as const
+
+const PANE_STATUS_COLOR: Readonly<Record<NurseryAgentStatus, string>> = {
+  running: PANE_COLOR.accent,
+  completed: PANE_COLOR.success,
+  failed: PANE_COLOR.error,
+  killed: PANE_COLOR.muted,
+}
+
 const ACTIVITY_GLYPH: Readonly<Record<NurseryActivity['state'], string>> = {
   running: '…',
   done: '✓',
@@ -73,6 +95,7 @@ let ticker: Timer | undefined
 let ticks = 0
 let cwd: string | undefined
 const endedEarly = new Map<string, Ending>()
+let missedOnce = new Set<string>()
 
 const sanitize = (text: string): string =>
   text.replace(ESCAPE_SEQUENCE, '').replace(/\t/g, ' ').replace(CONTROL, '')
@@ -186,20 +209,27 @@ const reconcile = async ($: EngineInterface): Promise<void> => {
   const listed = await $.agent.list()
   const statusById = new Map(listed.map(info => [info.id, STATUS_FROM_LIST[info.status]] as const))
   const now = await $.clock.now()
-  await update($, agents, list =>
-    list.map(agent => {
+  const marked = missedOnce
+  const list = await update($, agents, current =>
+    current.map(agent => {
+      if (!isRunning(agent)) return agent
       const status = statusById.get(agent.id)
+      if (status === undefined) {
+        const isPastGrace = now - (agent.resumedAt ?? agent.startedAt) > ABSENT_GRACE_MS
 
-      return isRunning(agent) && status !== undefined && status !== 'running'
-        ? { ...agent, status, endedAt: now }
-        : agent
+        return marked.has(agent.id) && isPastGrace ? { ...agent, status: 'completed', endedAt: now } : agent
+      }
+
+      return status === 'running' ? agent : { ...agent, status, endedAt: now }
     }),
   )
+  missedOnce = new Set(list.filter(agent => isRunning(agent) && !statusById.has(agent.id)).map(agent => agent.id))
 }
 
 const stopTicking = (): void => {
   ticker?.cancel()
   ticker = undefined
+  missedOnce = new Set()
 }
 
 const tick = async ($: EngineInterface): Promise<void> => {
@@ -279,6 +309,7 @@ const statusOfTurn = (reason: string): NurseryAgentStatus =>
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     cwd = e.cwd
+    missedOnce = new Set()
     await quietly(() =>
       $.command.register({ name: 'nursery-panel', description: 'Abre el panel en vivo de los subagentes' }),
     )
@@ -306,6 +337,7 @@ export const register: Register = on => {
       const now = await $.clock.now()
       const early = e.resume === undefined ? endedEarly.get(agentId) : undefined
       endedEarly.delete(agentId)
+      if (e.resume !== undefined) missedOnce.delete(agentId)
       const list = await update($, agents, list => {
         const previous = list.find(agent => agent.id === agentId)
         const base: NurseryAgent = previous ?? {
@@ -320,7 +352,13 @@ export const register: Register = on => {
         }
         const { endedAt: _ended, ...rest } = base
         const agent: NurseryAgent =
-          early === undefined ? { ...rest, status: 'running' } : { ...rest, ...early }
+          e.resume !== undefined
+            ? { ...rest, status: 'running', resumedAt: now }
+            : early !== undefined
+              ? { ...rest, ...early }
+              : previous !== undefined && !isRunning(previous)
+                ? previous
+                : { ...rest, status: 'running' }
 
         return [...list.filter(one => one.id !== agentId), agent].slice(-MAX_AGENTS)
       })
@@ -408,20 +446,32 @@ export const register: Register = on => {
     await read($, clockNow)
     const now = await $.clock.now()
     if (list.some(isRunning)) keepTicking($)
-    const room = Math.max(
-      2,
+    const bodyRows = Math.max(
+      MIN_PANE_ROWS,
       e.props.scroll.bodyRows > 0 ? e.props.scroll.bodyRows : (e.viewport?.rows ?? 24) - 4,
     )
-    const columns = Math.max(40, e.props.bodyColumns)
+    const room = bodyRows - FRAME_ROWS
+    const columns = Math.max(MIN_PANE_COLUMNS, e.props.bodyColumns) - FRAME_COLUMNS
     const isWide = columns >= WIDE_COLUMNS
+    const frame = (...content: RenderNode[]) => (
+      <Box flexDirection="column" width="100%" height={bodyRows} backgroundColor={PANE_COLOR.background}>
+        <Box
+          flexDirection="column"
+          flexGrow={1}
+          borderStyle="round"
+          borderColor={PANE_COLOR.border}
+          paddingX={1}
+        >
+          <Text bold color={PANE_COLOR.text}>
+            {TITLE}
+          </Text>
+          {content}
+        </Box>
+      </Box>
+    )
 
     if (list.length === 0) {
-      return (
-        <Box flexDirection="column">
-          <Text bold>{TITLE}</Text>
-          <Text dimColor>Ningún subagente en esta sesión.</Text>
-        </Box>
-      )
+      return frame(<Text color={PANE_COLOR.muted}>Ningún subagente en esta sesión.</Text>)
     }
 
     const lines = arrange(list).flatMap(({ agent, depth }) => {
@@ -432,33 +482,35 @@ export const register: Register = on => {
       const tail = `${elapsedOf(agent, now).padStart(6)} ${toolsText(agent.toolCount, isWide).padStart(isWide ? 16 : 8)}`
       const descriptionWidth = Math.max(8, columns - indent.length - TYPE_WIDTH - tail.length - 5)
       const description = clip(firstLine(agent.description), descriptionWidth).padEnd(descriptionWidth)
+      const typeColor = isDone ? PANE_COLOR.muted : isNursery ? PANE_COLOR.accent : PANE_COLOR.text
       const row = (
         <Button key={`agent-${agent.id}`} plain onPress={() => void quietly(() => viewAgent($, agent.id))}>
           {indent}
-          <Text color={STATUS_COLOR[agent.status]}>{STATUS_GLYPH[agent.status]}</Text>{' '}
-          <Text
-            bold
-            dimColor={isDone}
-            {...(isNursery ? { color: 'suggestion' } : {})}
-          >
+          <Text color={PANE_STATUS_COLOR[agent.status]}>{STATUS_GLYPH[agent.status]}</Text>{' '}
+          <Text bold color={typeColor}>
             {clip(type, TYPE_WIDTH).padEnd(TYPE_WIDTH)}
           </Text>{' '}
-          <Text dimColor={isDone}>{description}</Text>
-          <Text dimColor>{` ${tail}`}</Text>
+          <Text color={isDone ? PANE_COLOR.muted : PANE_COLOR.text}>{description}</Text>
+          <Text color={PANE_COLOR.muted}>{` ${tail}`}</Text>
         </Button>
       )
       const activity = isDone
         ? []
-        : agent.activity.map(one => (
-            <Text dimColor={one.kind === 'tool' && one.state === 'done'}>
-              {indent}
-              {'  '}
-              <Text {...(one.state === 'failed' ? { color: 'error' } : {})}>
-                {one.kind === 'text' ? '»' : ACTIVITY_GLYPH[one.state]}
-              </Text>{' '}
-              {one.label}
-            </Text>
-          ))
+        : agent.activity.map(one => {
+            const color =
+              one.kind === 'tool' && one.state === 'done' ? PANE_COLOR.muted : PANE_COLOR.text
+
+            return (
+              <Text wrap="truncate" color={color}>
+                {indent}
+                {'  '}
+                <Text color={one.state === 'failed' ? PANE_COLOR.error : color}>
+                  {one.kind === 'text' ? '»' : ACTIVITY_GLYPH[one.state]}
+                </Text>{' '}
+                {one.label}
+              </Text>
+            )
+          })
 
       return [row, ...activity]
     })
@@ -466,12 +518,9 @@ export const register: Register = on => {
     const visible = lines.length > room - 1 ? lines.slice(0, Math.max(1, room - 2)) : lines
     const hidden = lines.length - visible.length
 
-    return (
-      <Box flexDirection="column">
-        <Text bold>{TITLE}</Text>
-        {visible}
-        {hidden > 0 && <Text dimColor>{`+${hidden} más`}</Text>}
-      </Box>
+    return frame(
+      ...visible,
+      ...(hidden > 0 ? [<Text color={PANE_COLOR.muted}>{`+${hidden} más`}</Text>] : []),
     )
   })
 

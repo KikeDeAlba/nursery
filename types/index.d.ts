@@ -19,6 +19,7 @@ export type NurseryAgent = {
   status: NurseryAgentStatus
   startedAt: number
   endedAt?: number
+  resumedAt?: number
   toolCount: number
   activity: NurseryActivity[]
 }
