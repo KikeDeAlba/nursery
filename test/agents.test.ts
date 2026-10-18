@@ -122,7 +122,7 @@ test('the rules make the main thread delegate, in parallel when it can', async (
   const section = rendered.slice(rendered.indexOf('## Delegación'))
   assert.ok(section.length > '## Delegación'.length)
   for (const name of await agentNames()) assert.match(section, new RegExp(`\\b${name}\\b`), `${name} missing from the delegation rules`)
-  assert.match(section, /máximo 3/)
+  assert.match(section, /máximo 10/)
   assert.match(section, /solo locales/)
 })
 
