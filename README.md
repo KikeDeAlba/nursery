@@ -101,7 +101,7 @@ aplica en modo plan:
 1. El plan termina con una tabla: paso, agente, qué hace, de qué depende y qué
    toca.
 2. Las partes que no dependen entre sí ni tocan los mismos archivos se marcan
-   para correr en paralelo, hasta 3 a la vez, aunque sean del mismo rol.
+   para correr en paralelo, hasta 10 a la vez, aunque sean del mismo rol.
 3. Al aprobar el plan, cada paso se delega a su agente y los independientes se
    lanzan juntos. Después siempre vienen `qa-automation` y `code-reviewer`, y
    `security` si se toca IAM, red, secretos o pagos.
