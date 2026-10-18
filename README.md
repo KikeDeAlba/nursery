@@ -159,7 +159,16 @@ Por cada agente muestra:
   falló; el comando de Bash, el archivo de Read, Edit o Write, el patrón de
   Grep o Glob) o la primera línea de lo que dijo (`»`).
 
-Los agentes terminados quedan atenuados en una sola línea, sin actividad.
+Los agentes terminados quedan atenuados en una sola línea, sin actividad. Un
+agente que lleva más de 30 s corriendo (contados desde que se lanzó o desde su
+última reanudación) y falta dos veces seguidas en la lista de agentes de Claude
+Code se da por terminado (`✓`). Si la consulta de la lista falla entre dos
+ausencias, no cuenta y no borra la anterior: las dos ausencias siguen siendo
+seguidas. Volver a lanzar un agente terminado solo lo reabre si es una
+reanudación del mismo agente.
+
+El panel tiene un fondo oscuro fijo (`#1e1e1e`) que ocupa todo su alto, con un
+borde redondeado y colores propios, iguales con cualquier tema de Claude Code.
 
 Los subagentes que lanza otro subagente salen sangrados bajo su padre. El panel
 muestra todos los subagentes, no solo los de nursery.
