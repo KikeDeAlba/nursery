@@ -1,6 +1,6 @@
 {
   "name": "@kikedealba/nursery",
-  "version": "0.2.3",
+  "version": "0.3.0",
   "description": "Specialist subagents and shared working rules for Claude Code, opencode, Codex and Gemini CLI.",
   "license": "MIT",
   "author": "Jesus Enrique De Alba Gaytan",
