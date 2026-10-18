@@ -14,7 +14,7 @@ const DESCRIPTIONS_TOTAL_MAX = 2500
 const BODY_MAX_LINES = 80
 const RULES_MAX_CHARS = 5200
 const SKILL_FILE = path.join(import.meta.dirname, '..', 'skills', 'nursery', 'SKILL.md')
-const TOOL_ONLY = ['.claude', 'EnterWorktree', 'ExitWorktree']
+const TOOL_ONLY = ['.claude', 'EnterWorktree', 'ExitWorktree', 'isolation:', 'worktree-agent-']
 const FOREIGN_TERMS = {
   claude: ['Codex', 'OpenAI', 'Gemini', 'Google', 'opencode'],
   codex: ['Claude', 'Anthropic', 'Gemini', 'Google', 'opencode', ...TOOL_ONLY],
@@ -130,6 +130,28 @@ test('agents that change code know how to work as one part of a parallel task', 
   for (const agent of (await loadAgents()).filter((item) => ['developer', 'devops', 'qa-automation'].includes(item.name))) {
     assert.match(agent.body, /## Rama asignada/, agent.name)
     assert.match(agent.body, /sin push ni MR/, agent.name)
+  }
+})
+
+test('parallel parts of one repo run in worktrees the orchestrator creates for them', async () => {
+  const rules = await readFile(RULES_FILE, 'utf8')
+  const skill = await readFile(SKILL_FILE, 'utf8')
+  assert.doesNotMatch(skill, /:::/)
+  const lower = skill.toLowerCase()
+  for (const term of ['Claude', 'Anthropic', 'Codex', 'OpenAI', 'Gemini', 'Google', 'opencode', ...TOOL_ONLY]) assert.ok(!lower.includes(term.toLowerCase()), `skill names ${term}`)
+  assert.match(skill, /worktree aislado/)
+  assert.match(skill, /git switch -C feature\/<n>-<parte> feature\/<n>/)
+  assert.match(skill, /git merge/)
+  assert.match(skill, /git worktree remove/)
+  assert.match(skill, /git branch -D/)
+  assert.match(skill, /no puedes escribir en otro repo/)
+  const claudeRules = agents.renderForAgent(rules, 'claude')
+  assert.match(claudeRules, /isolation: "worktree"/)
+  assert.match(claudeRules, /git merge/)
+  for (const agent of ['codex', 'gemini', 'opencode'] as const) assert.doesNotMatch(agents.renderForAgent(rules, agent), /isolation|Claude/)
+  for (const agent of (await loadAgents()).filter((item) => ['developer', 'devops', 'qa-automation'].includes(item.name))) {
+    assert.match(agent.body, /worktree creado para ti/, agent.name)
+    assert.match(agent.body, /git switch -C <rama> <base>/, agent.name)
   }
 })
 

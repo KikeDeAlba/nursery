@@ -25,11 +25,11 @@ Si el tipo no es obvio, pregunta con la interfaz de preguntas antes de llamar a 
 - Lanza en paralelo, en el mismo mensaje, hasta 10 agentes, aunque sean del mismo rol (dos `developer`, o `developer` y `devops`).
 - **Mismo repo:**
   - crea la rama de la tarea (`feature/<n>` desde `develop`) en tu worktree;
-  - asigna a cada parte la sub-rama `feature/<n>-<parte>` con base `feature/<n>` y dile que es una parte;
+  - lanza cada parte en su propio worktree aislado, como dicen las reglas generales (Delegación); asígnale la sub-rama `feature/<n>-<parte>`, dile que es una parte y que empiece con `git switch -C feature/<n>-<parte> feature/<n>` y haga commit ahí;
   - las sub-ramas son solo locales: nunca se suben;
-  - al terminar todas, mézclalas en `feature/<n>` y corre el gate completo;
-  - luego borra las sub-ramas y sus worktrees, salvo que una no se haya podido integrar (eso se reporta).
-- **Repos distintos:** cada parte lleva su propia rama y su MR.
+  - al terminar todas, desde tu worktree haz `git merge` de cada sub-rama en `feature/<n>` y corre el gate completo;
+  - luego `git worktree remove` de cada worktree de parte y `git branch -D` de su sub-rama y de cualquier rama que la herramienta haya creado para ese worktree, salvo que una no se haya podido integrar (eso se reporta).
+- **Repos distintos:** cada parte lleva su propia rama y su MR. Dentro de un worktree no puedes escribir en otro repo: esas partes corren después de salir de él o en otra sesión.
 - Al remoto solo sube la rama de la tarea ya integrada y revisada.
 
 ## 3. Corre la cadena
