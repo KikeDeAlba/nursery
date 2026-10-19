@@ -2,13 +2,51 @@ import { existsSync } from 'node:fs'
 import { copyFile, readFile, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { agents } from '@kikedealba/kit'
-import { platformContext } from '@kikedealba/kit/platform'
+import { platformContext, type PlatformContext } from '@kikedealba/kit/platform'
+import { defineManifest, registerTool, stableBin, unregisterTool, type ToolManifest } from '@kikedealba/kit/registry'
 import { AGENTS_DIR, RULES_FILE, agentNames } from './build.ts'
 import { PACKAGE_ROOT, VERSION } from './version.ts'
 
 export const TOOL = 'nursery'
 
 export const CLAUDE_PLUGIN: agents.ClaudePluginSpec = { marketplace: 'KikeDeAlba/nursery', marketplaceName: 'nursery', plugin: 'nursery' }
+
+export const CAPABILITIES = ['agents.subagents', 'agents.rules']
+
+export const INSTALL_HINT = 'npm install -g @kikedealba/nursery && nursery setup'
+
+export function binEntry(): string {
+  const built = path.join(PACKAGE_ROOT, 'dist', 'bin', 'nursery.js')
+  return existsSync(built) ? built : path.join(PACKAGE_ROOT, 'src', 'bin', 'nursery.ts')
+}
+
+export function binCommand(): string[] {
+  return [process.execPath, binEntry()]
+}
+
+export async function stableBinCommand(ctx?: PlatformContext): Promise<string[]> {
+  return stableBin(TOOL, VERSION, binCommand(), ctx)
+}
+
+export function manifest(bin: readonly string[] = binCommand()): ToolManifest {
+  return defineManifest({
+    name: TOOL,
+    version: VERSION,
+    description: 'Specialist subagents and shared working rules for coding agents',
+    bin: [...bin],
+    capabilities: [...CAPABILITIES],
+    homepage: 'https://github.com/KikeDeAlba/nursery',
+    install: INSTALL_HINT,
+  })
+}
+
+export async function register(ctx?: PlatformContext): Promise<string> {
+  return registerTool(manifest(await stableBinCommand(ctx)), ctx)
+}
+
+export async function unregister(ctx?: PlatformContext): Promise<boolean> {
+  return unregisterTool(TOOL, ctx)
+}
 
 export const LEGACY_HEADING = '# Reglas generales (todos los proyectos)'
 
@@ -114,6 +152,26 @@ export async function uninstallAgents(options: agents.InstallOptions = {}): Prom
   steps.push(...(await agents.uninstallIntegration(memoryIntegration(), { ...options, agents: ['claude'] })))
   steps.push(...(await agents.uninstallIntegration(await integration(), { ...options, agents: ['opencode', 'codex', 'gemini'] })))
   return steps
+}
+
+export interface SetupResult {
+  manifest: string
+  steps: agents.Step[]
+}
+
+export async function setupTool(selection: AgentSelection, options: SetupOptions = {}): Promise<SetupResult> {
+  const manifestPath = await register(options.ctx)
+  return { manifest: manifestPath, steps: await installAgents(selection, options) }
+}
+
+export interface UninstallResult {
+  unregistered: boolean
+  steps: agents.Step[]
+}
+
+export async function uninstallTool(options: agents.InstallOptions = {}): Promise<UninstallResult> {
+  const steps = await uninstallAgents(options)
+  return { unregistered: await unregister(options.ctx), steps }
 }
 
 export type MemoryState = 'current' | 'stale' | 'missing' | 'legacy'

@@ -3,10 +3,15 @@ import { existsSync } from 'node:fs'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { test } from 'node:test'
 import { agents } from '@kikedealba/kit'
+import { assertConformance } from '@kikedealba/kit/conformance'
 import { platformContext } from '@kikedealba/kit/platform'
-import { checkMemory, findLegacy, installAgents, removeLegacy, uninstallAgents, LEGACY_HEADING } from '../src/setup.ts'
+import { CAPABILITIES, checkMemory, findLegacy, installAgents, manifest, removeLegacy, setupTool, uninstallAgents, uninstallTool, LEGACY_HEADING } from '../src/setup.ts'
+import { VERSION } from '../src/version.ts'
+
+const BIN = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'src', 'bin', 'nursery.ts')
 
 const LEGACY = `# Personal
 
@@ -30,7 +35,7 @@ async function sandbox(t: { after: (fn: () => Promise<void>) => void }) {
     env: { PATH: '', XDG_CONFIG_HOME: path.join(home, '.config'), XDG_DATA_HOME: path.join(home, '.local', 'share'), KIT_REGISTRY_DIR: path.join(home, 'registry') },
   })
   const homes = agents.agentHomes(ctx)
-  return { home, homes, options: { ctx, locate: async () => null } }
+  return { home, homes, registry: path.join(home, 'registry'), options: { ctx, locate: async () => null } }
 }
 
 test('legacy rules are found outside kit blocks and removed with their section only', () => {
@@ -89,4 +94,27 @@ test('unmarked rules block the memory block until --replace-legacy', async (t) =
   assert.equal(text.match(/# Reglas generales/g)?.length, 1)
   assert.equal(await readFile(`${file}.legacy-backup`, 'utf8'), LEGACY)
   assert.deepEqual((await checkMemory(['claude'], options)).map((report) => report.state), ['current'])
+})
+
+test('nursery passes the kit conformance checks', async () => {
+  await assertConformance([process.execPath, BIN], manifest())
+})
+
+test('setup registers nursery in the kit registry and uninstall removes it', async (t) => {
+  const { registry, options } = await sandbox(t)
+  const file = path.join(registry, 'nursery.json')
+  const result = await setupTool(['opencode'], options)
+  assert.equal(result.manifest, file)
+  const registered = JSON.parse(await readFile(file, 'utf8')) as { name: string; version: string; capabilities: string[]; emits: string[]; subscribes: unknown[]; bin: string[] }
+  assert.equal(registered.name, 'nursery')
+  assert.equal(registered.version, VERSION)
+  assert.deepEqual(registered.capabilities, CAPABILITIES)
+  assert.deepEqual(registered.capabilities, ['agents.subagents', 'agents.rules'])
+  assert.deepEqual(registered.emits, [])
+  assert.deepEqual(registered.subscribes, [])
+  assert.equal(registered.bin[0], process.execPath)
+
+  const removed = await uninstallTool(options)
+  assert.equal(removed.unregistered, true)
+  assert.ok(!existsSync(file))
 })
