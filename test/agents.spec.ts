@@ -52,9 +52,9 @@ test('includes are replaced and unknown includes fail', () => {
   assert.throws(() => renderAgent('@include missing\n', new Map()), /unknown include/)
 })
 
-test('there are nine agents with valid frontmatter', async () => {
+test('there are ten agents with valid frontmatter', async () => {
   const loaded = await loadAgents()
-  assert.deepEqual(loaded.map((agent) => agent.name), ['analyst', 'architect', 'code-reviewer', 'developer', 'devops', 'documenter', 'qa-automation', 'security', 'sre'])
+  assert.deepEqual(loaded.map((agent) => agent.name), ['analyst', 'architect', 'code-reviewer', 'developer', 'devops', 'documenter', 'qa-automation', 'researcher', 'security', 'sre'])
   for (const agent of loaded) {
     assert.equal(agent.attributes['name'], agent.name)
     assert.ok(!agent.name.includes(':'))
