@@ -12,7 +12,7 @@ Lleva `$ARGUMENTS` de punta a punta con los subagentes de nursery. Tú orquestas
 | Tipo | Cadena |
 |---|---|
 | Feature o historia | researcher → analyst → architect (solo si hay decisiones de diseño) → developer → qa-automation → code-reviewer → documenter (solo si cambia el uso) |
-| Bug | developer → qa-automation → code-reviewer |
+| Bug | researcher (si no es trivial: causa desconocida o varios repos) → developer → qa-automation → code-reviewer |
 | Infraestructura o pipeline | researcher → devops → security (si toca IAM, red o secretos) → code-reviewer |
 | Incidente | researcher → sre → developer o devops (corrección) → qa-automation |
 | Revisión antes de mezclar | code-reviewer y security, en paralelo |
