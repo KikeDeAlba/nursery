@@ -145,3 +145,32 @@ test('usage errors with --json come back as an error envelope with exit 2', asyn
   }
   assert.ok(!existsSync(path.join(registry, 'nursery.json')))
 })
+
+test('researcher is installed for opencode and codex and named in the rules block', async (t) => {
+  const { homes, options } = await sandbox(t)
+  await installAgents(['opencode', 'codex'], options)
+  assert.match(await readFile(path.join(homes.opencode, 'agents', 'researcher.md'), 'utf8'), /mode: subagent/)
+  assert.ok(existsSync(path.join(homes.codex, 'agents', 'researcher.toml')))
+  for (const file of [path.join(homes.opencode, 'AGENTS.md'), path.join(homes.codex, 'AGENTS.md')]) {
+    assert.match(await readFile(file, 'utf8'), /empieza con `researcher`/)
+  }
+})
+
+test('the CLI reports capabilities as one json line and rejects unknown commands', () => {
+  const run = (...args: string[]) => spawnSync(process.execPath, [BIN, ...args], { encoding: 'utf8' })
+
+  const ok = run('capabilities', '--json')
+  assert.equal(ok.status, 0)
+  assert.equal(ok.stdout.trimEnd().split('\n').length, 1)
+  const okEnvelope = JSON.parse(ok.stdout) as { ok: boolean; data: { capabilities: string[] } }
+  assert.equal(okEnvelope.ok, true)
+  assert.deepEqual(okEnvelope.data.capabilities, CAPABILITIES)
+
+  const bad = run('bogus', '--json')
+  assert.notEqual(bad.status, 0)
+  assert.equal((JSON.parse(bad.stdout) as { ok: boolean }).ok, false)
+
+  const plain = run('bogus')
+  assert.equal(plain.status, 2)
+  assert.match(plain.stdout + plain.stderr, /Uso:/)
+})
