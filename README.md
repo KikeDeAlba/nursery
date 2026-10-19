@@ -7,7 +7,7 @@ Claude Code, opencode, Codex y Gemini CLI.
   Viven en `rules/RULES.md` y se instalan una sola vez en la memoria global de
   cada agente. Las leen la conversación principal y todos los subagentes, así
   que una instalación limpia sigue tus reglas desde el primer mensaje.
-- **Nueve subagentes**, cada uno con una descripción corta para que el agente
+- **Diez subagentes**, cada uno con una descripción corta para que el agente
   principal sepa solo cuándo delegarle, y un cuerpo con lo propio del rol.
 - **Delegación automática:** las reglas hacen que todo plan termine con una
   tabla de pasos y agentes, y que al aprobarlo cada paso se delegue, en paralelo
@@ -47,8 +47,22 @@ bloque no se escribe para no duplicarlas. `nursery setup --replace-legacy` quita
 esa sección, deja una copia en `<archivo>.legacy-backup` y escribe el bloque.
 
 `nursery check` dice si el bloque de cada agente está al día, falta o choca con
-reglas sin marcadores. `nursery uninstall` quita el plugin, los subagentes y los
-bloques.
+reglas sin marcadores. `nursery uninstall` quita el plugin, los subagentes, los
+bloques y el registro en kit.
+
+### Registro en kit
+
+Antes de instalar en los agentes, `nursery setup` registra nursery en el
+registro de kit (`nursery.json` en el directorio del registro, o en
+`KIT_REGISTRY_DIR` si está definido), igual que el resto de las herramientas.
+El manifiesto declara las capacidades `agents.subagents` y `agents.rules`; nursery
+no emite eventos ni se suscribe a los de otras herramientas. `nursery uninstall`
+borra el registro.
+
+`nursery capabilities --json` imprime en una línea el sobre de kit con
+`{ name, version, envelope, capabilities, emits }`; sin `--json` lo muestra en
+texto. Con `--json`, un comando desconocido imprime un sobre de error
+(`ok: false`, código `UNKNOWN_COMMAND`) y sale con código 2.
 
 ### El plugin de Claude Code
 
@@ -65,7 +79,7 @@ porque un plugin no puede escribir en `CLAUDE.md`: para ellas hace falta
 
 | Pieza | Qué es | Cuándo cuesta contexto |
 |---|---|---|
-| Descripción de cada subagente | Cuándo delegarle (≤ 300 caracteres) | Siempre, unos 600 tokens entre los nueve |
+| Descripción de cada subagente | Cuándo delegarle (≤ 300 caracteres) | Siempre, unos 650 tokens entre los diez |
 | Cuerpo de cada subagente | Rol, pasos, límites y formato de entrega | Solo dentro del subagente, al llamarlo |
 | `skills/nursery` | `/nursery`: elige la cadena y pasa entregas entre agentes | Nada hasta que el usuario lo escribe |
 | `hooks/` | Panel de subagentes (ver «Panel de subagentes») | Nunca: no agrega nada al prompt |
@@ -75,6 +89,7 @@ porque un plugin no puede escribir en `CLAUDE.md`: para ellas hace falta
 
 | Agente | Para qué | Herramientas | Modelo / esfuerzo |
 |---|---|---|---|
+| `researcher` | Confirma o refuta supuestos con fuentes antes de planear; no diseña ni edita | lectura, Bash, web, skills | sonnet / medium |
 | `analyst` | Historias, criterios de aceptación, lectura de tickets y minutas | lectura, Bash, skills | sonnet / medium |
 | `architect` | Diseño de soluciones, alternativas y ADRs | lectura, Bash, web, skills | opus / high |
 | `developer` | Feature o bugfix acotado en su worktree, hasta el MR | todas | claude-opus-5-5 / medium |
@@ -229,7 +244,7 @@ Las pruebas fallan si:
 - dos agentes comparten una frase disparadora;
 - un cuerpo pasa de 80 líneas o repite texto de `rules/RULES.md`;
 - el bloque de reglas pasa de 5,200 caracteres, o su sección «Delegación» no nombra
-  a los nueve agentes;
+  a los diez agentes;
 - developer, devops o qa-automation no saben entregar como parte (sin push ni MR).
 
 Para probar el panel de subagentes (`hooks/`):

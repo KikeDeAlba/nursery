@@ -52,9 +52,9 @@ test('includes are replaced and unknown includes fail', () => {
   assert.throws(() => renderAgent('@include missing\n', new Map()), /unknown include/)
 })
 
-test('there are nine agents with valid frontmatter', async () => {
+test('there are ten agents with valid frontmatter', async () => {
   const loaded = await loadAgents()
-  assert.deepEqual(loaded.map((agent) => agent.name), ['analyst', 'architect', 'code-reviewer', 'developer', 'devops', 'documenter', 'qa-automation', 'security', 'sre'])
+  assert.deepEqual(loaded.map((agent) => agent.name), ['analyst', 'architect', 'code-reviewer', 'developer', 'devops', 'documenter', 'qa-automation', 'researcher', 'security', 'sre'])
   for (const agent of loaded) {
     assert.equal(agent.attributes['name'], agent.name)
     assert.ok(!agent.name.includes(':'))
@@ -124,6 +124,18 @@ test('the rules make the main thread delegate, in parallel when it can', async (
   for (const name of await agentNames()) assert.match(section, new RegExp(`\\b${name}\\b`), `${name} missing from the delegation rules`)
   assert.match(section, /máximo 10/)
   assert.match(section, /solo locales/)
+})
+
+test('the researcher is read-only and starts the planned chains', async () => {
+  const researcher = (await loadAgents()).find((agent) => agent.name === 'researcher')
+  const tools = (researcher?.attributes['tools'] ?? '').split(',').map((item) => item.trim())
+  assert.ok(tools.length > 1)
+  for (const tool of ['Write', 'Edit']) assert.ok(!tools.includes(tool), `researcher has ${tool}`)
+  const skill = await readFile(SKILL_FILE, 'utf8')
+  for (const chain of ['Feature o historia', 'Infraestructura o pipeline', 'Incidente']) {
+    const row = skill.split('\n').find((line) => line.startsWith(`| ${chain} |`))
+    assert.match(row ?? '', /^\| [^|]+ \| researcher → /, `${chain} does not start with researcher`)
+  }
 })
 
 test('agents that change code know how to work as one part of a parallel task', async () => {
