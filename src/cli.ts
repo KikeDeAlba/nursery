@@ -2,9 +2,9 @@ import { readFile } from 'node:fs/promises'
 import path from 'node:path'
 import { parseArgs } from 'node:util'
 import { agents } from '@kikedealba/kit'
-import { successEnvelope, writeJson } from '@kikedealba/kit/envelope'
+import { ENVELOPE_VERSION, errorEnvelope, successEnvelope, writeJson } from '@kikedealba/kit/envelope'
 import { agentNames, buildAgents, staleAgents, writeAgents, AGENTS_DIR } from './build.ts'
-import { checkMemory, installAgents, uninstallAgents, type AgentSelection } from './setup.ts'
+import { CAPABILITIES, TOOL, checkMemory, setupTool, uninstallTool, type AgentSelection } from './setup.ts'
 import { SCHEMA_VERSION, VERSION } from './version.ts'
 
 const HELP = `nursery ${VERSION}
@@ -15,7 +15,10 @@ Uso:
   nursery check [--agents ...] [--json]
   nursery list [--json]
   nursery build [--check]
+  nursery capabilities [--json]
   nursery --version`
+
+class UsageError extends Error {}
 
 function out(line: string): void {
   process.stdout.write(`${line}\n`)
@@ -26,7 +29,7 @@ function readAgents(raw: string | undefined): AgentSelection {
   if (raw === 'all') return 'all'
   const names = raw.split(',').map((name) => name.trim()).filter((name) => name.length > 0)
   const unknown = names.filter((name) => !(agents.AGENTS as readonly string[]).includes(name))
-  if (unknown.length > 0) throw new Error(`Unknown agent: ${unknown.join(', ')}. Use ${agents.AGENTS.join(', ')}, all or detected.`)
+  if (unknown.length > 0) throw new UsageError(`Unknown agent: ${unknown.join(', ')}. Use ${agents.AGENTS.join(', ')}, all or detected.`)
   return names as agents.AgentName[]
 }
 
@@ -36,17 +39,23 @@ function printSteps(steps: readonly agents.Step[]): void {
 
 async function setup(argv: string[]): Promise<number> {
   const { values } = parseArgs({ args: argv, options: { agents: { type: 'string' }, 'replace-legacy': { type: 'boolean', default: false }, json: { type: 'boolean', default: false } } })
-  const steps = await installAgents(readAgents(values.agents), { replaceLegacy: values['replace-legacy'] })
-  if (values.json) writeJson(successEnvelope(SCHEMA_VERSION, 'setup', { steps }))
-  else printSteps(steps)
+  const { manifest, steps } = await setupTool(readAgents(values.agents), { replaceLegacy: values['replace-legacy'] })
+  if (values.json) writeJson(successEnvelope(SCHEMA_VERSION, 'setup', { manifest, steps }))
+  else {
+    out(`- registered in ${manifest}`)
+    printSteps(steps)
+  }
   return steps.some((step) => step.state === 'failed') ? 1 : 0
 }
 
 async function uninstall(argv: string[]): Promise<number> {
   const { values } = parseArgs({ args: argv, options: { json: { type: 'boolean', default: false } } })
-  const steps = await uninstallAgents()
-  if (values.json) writeJson(successEnvelope(SCHEMA_VERSION, 'uninstall', { steps }))
-  else printSteps(steps.filter((step) => step.state === 'removed'))
+  const { unregistered, steps } = await uninstallTool()
+  if (values.json) writeJson(successEnvelope(SCHEMA_VERSION, 'uninstall', { unregistered, steps }))
+  else {
+    out(`- registry: ${unregistered ? 'removed' : 'not registered'}`)
+    printSteps(steps.filter((step) => step.state === 'removed'))
+  }
   return 0
 }
 
@@ -71,6 +80,14 @@ async function list(argv: string[]): Promise<number> {
   return 0
 }
 
+function capabilities(argv: string[]): number {
+  const { values } = parseArgs({ args: argv, options: { json: { type: 'boolean', default: false } } })
+  const data = { name: TOOL, version: VERSION, envelope: ENVELOPE_VERSION, capabilities: [...CAPABILITIES], emits: [] as string[] }
+  if (values.json) writeJson(successEnvelope(SCHEMA_VERSION, 'capabilities', data))
+  else out(`nursery ${VERSION}\nCapabilities: ${CAPABILITIES.join(', ')}`)
+  return 0
+}
+
 async function build(argv: string[]): Promise<number> {
   const { values } = parseArgs({ args: argv, options: { check: { type: 'boolean', default: false } } })
   const built = await buildAgents()
@@ -84,8 +101,15 @@ async function build(argv: string[]): Promise<number> {
   return 0
 }
 
+function errorCode(error: unknown): string {
+  if (error instanceof UsageError) return 'USAGE'
+  const code = error instanceof Error && 'code' in error ? String(error.code) : ''
+  return code.startsWith('ERR_PARSE_ARGS') ? 'USAGE' : 'UNEXPECTED'
+}
+
 export async function main(argv: readonly string[]): Promise<number> {
   const [command, ...rest] = argv
+  const json = argv.includes('--json')
   try {
     if (command === '--version' || command === '-v') {
       out(VERSION)
@@ -96,10 +120,18 @@ export async function main(argv: readonly string[]): Promise<number> {
     if (command === 'check') return await check(rest)
     if (command === 'list') return await list(rest)
     if (command === 'build') return await build(rest)
+    if (command === 'capabilities') return capabilities(rest)
+    const help = command === undefined || command === 'help' || command === '--help'
+    if (json && !help) {
+      writeJson(errorEnvelope(SCHEMA_VERSION, command, { code: 'UNKNOWN_COMMAND', message: `Unknown command "${command}".`, hint: 'Run "nursery help".' }))
+      return 2
+    }
     out(HELP)
-    return command === undefined || command === 'help' || command === '--help' ? 0 : 2
+    return help ? 0 : 2
   } catch (error) {
-    process.stderr.write(`nursery: ${error instanceof Error ? error.message : String(error)}\n`)
+    const message = error instanceof Error ? error.message : String(error)
+    if (json) writeJson(errorEnvelope(SCHEMA_VERSION, command ?? 'nursery', { code: errorCode(error), message }))
+    else process.stderr.write(`nursery: ${message}\n`)
     return 2
   }
 }

@@ -1,12 +1,18 @@
 import assert from 'node:assert/strict'
+import { spawnSync } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { test } from 'node:test'
 import { agents } from '@kikedealba/kit'
+import { assertConformance } from '@kikedealba/kit/conformance'
 import { platformContext } from '@kikedealba/kit/platform'
-import { checkMemory, findLegacy, installAgents, removeLegacy, uninstallAgents, LEGACY_HEADING } from '../src/setup.ts'
+import { CAPABILITIES, checkMemory, findLegacy, installAgents, manifest, removeLegacy, setupTool, uninstallAgents, uninstallTool, LEGACY_HEADING } from '../src/setup.ts'
+import { VERSION } from '../src/version.ts'
+
+const BIN = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'src', 'bin', 'nursery.ts')
 
 const LEGACY = `# Personal
 
@@ -30,7 +36,7 @@ async function sandbox(t: { after: (fn: () => Promise<void>) => void }) {
     env: { PATH: '', XDG_CONFIG_HOME: path.join(home, '.config'), XDG_DATA_HOME: path.join(home, '.local', 'share'), KIT_REGISTRY_DIR: path.join(home, 'registry') },
   })
   const homes = agents.agentHomes(ctx)
-  return { home, homes, options: { ctx, locate: async () => null } }
+  return { home, homes, registry: path.join(home, 'registry'), options: { ctx, locate: async () => null } }
 }
 
 test('legacy rules are found outside kit blocks and removed with their section only', () => {
@@ -89,4 +95,53 @@ test('unmarked rules block the memory block until --replace-legacy', async (t) =
   assert.equal(text.match(/# Reglas generales/g)?.length, 1)
   assert.equal(await readFile(`${file}.legacy-backup`, 'utf8'), LEGACY)
   assert.deepEqual((await checkMemory(['claude'], options)).map((report) => report.state), ['current'])
+})
+
+test('nursery passes the kit conformance checks', async () => {
+  await assertConformance([process.execPath, BIN], manifest())
+})
+
+test('setup registers nursery in the kit registry and uninstall removes it', async (t) => {
+  const { registry, options } = await sandbox(t)
+  const file = path.join(registry, 'nursery.json')
+  const result = await setupTool(['opencode'], options)
+  assert.equal(result.manifest, file)
+  const registered = JSON.parse(await readFile(file, 'utf8')) as { name: string; version: string; capabilities: string[]; emits: string[]; subscribes: unknown[]; bin: string[] }
+  assert.equal(registered.name, 'nursery')
+  assert.equal(registered.version, VERSION)
+  assert.deepEqual(registered.capabilities, CAPABILITIES)
+  assert.deepEqual(registered.capabilities, ['agents.subagents', 'agents.rules'])
+  assert.deepEqual(registered.emits, [])
+  assert.deepEqual(registered.subscribes, [])
+  assert.equal(registered.bin[0], process.execPath)
+
+  const removed = await uninstallTool(options)
+  assert.equal(removed.unregistered, true)
+  assert.ok(!existsSync(file))
+  assert.equal((await uninstallTool(options)).unregistered, false)
+})
+
+test('setup registers nursery even when an agent step fails', async (t) => {
+  const { homes, registry, options } = await sandbox(t)
+  await mkdir(path.dirname(homes.opencode), { recursive: true })
+  await writeFile(homes.opencode, 'not a directory')
+  const result = await setupTool(['opencode'], options)
+  assert.ok(result.steps.some((step) => step.state === 'failed'))
+  assert.ok(existsSync(path.join(registry, 'nursery.json')))
+})
+
+test('usage errors with --json come back as an error envelope with exit 2', async (t) => {
+  const { home, registry } = await sandbox(t)
+  for (const args of [['setup', '--agents', 'bogus', '--json'], ['setup', '--bogus', '--json']]) {
+    const run = spawnSync(process.execPath, [BIN, ...args], { encoding: 'utf8', env: { ...process.env, HOME: home, KIT_REGISTRY_DIR: registry } })
+    assert.equal(run.status, 2, args.join(' '))
+    const lines = run.stdout.trim().split('\n')
+    assert.equal(lines.length, 1, args.join(' '))
+    const envelope = JSON.parse(lines[0] ?? '') as { ok: boolean; command: string; error: { code: string; message: string } }
+    assert.equal(envelope.ok, false)
+    assert.equal(envelope.command, 'setup')
+    assert.equal(envelope.error.code, 'USAGE')
+    assert.ok(envelope.error.message.length > 0)
+  }
+  assert.ok(!existsSync(path.join(registry, 'nursery.json')))
 })

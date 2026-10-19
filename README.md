@@ -47,8 +47,22 @@ bloque no se escribe para no duplicarlas. `nursery setup --replace-legacy` quita
 esa sección, deja una copia en `<archivo>.legacy-backup` y escribe el bloque.
 
 `nursery check` dice si el bloque de cada agente está al día, falta o choca con
-reglas sin marcadores. `nursery uninstall` quita el plugin, los subagentes y los
-bloques.
+reglas sin marcadores. `nursery uninstall` quita el plugin, los subagentes, los
+bloques y el registro en kit.
+
+### Registro en kit
+
+Antes de instalar en los agentes, `nursery setup` registra nursery en el
+registro de kit (`nursery.json` en el directorio del registro, o en
+`KIT_REGISTRY_DIR` si está definido), igual que el resto de las herramientas.
+El manifiesto declara las capacidades `agents.subagents` y `agents.rules`; nursery
+no emite eventos ni se suscribe a los de otras herramientas. `nursery uninstall`
+borra el registro.
+
+`nursery capabilities --json` imprime en una línea el sobre de kit con
+`{ name, version, envelope, capabilities, emits }`; sin `--json` lo muestra en
+texto. Con `--json`, un comando desconocido imprime un sobre de error
+(`ok: false`, código `UNKNOWN_COMMAND`) y sale con código 2.
 
 ### El plugin de Claude Code
 
