@@ -11,11 +11,13 @@ Lleva `$ARGUMENTS` de punta a punta con los subagentes de nursery. Tú orquestas
 
 | Tipo | Cadena |
 |---|---|
-| Feature o historia | analyst → architect (solo si hay decisiones de diseño) → developer → qa-automation → code-reviewer → documenter (solo si cambia el uso) |
+| Feature o historia | researcher → analyst → architect (solo si hay decisiones de diseño) → developer → qa-automation → code-reviewer → documenter (solo si cambia el uso) |
 | Bug | developer → qa-automation → code-reviewer |
-| Infraestructura o pipeline | devops → security (si toca IAM, red o secretos) → code-reviewer |
-| Incidente | sre → developer o devops (corrección) → qa-automation |
+| Infraestructura o pipeline | researcher → devops → security (si toca IAM, red o secretos) → code-reviewer |
+| Incidente | researcher → sre → developer o devops (corrección) → qa-automation |
 | Revisión antes de mezclar | code-reviewer y security, en paralelo |
+
+`researcher` va primero: confirma o refuta con fuentes lo que el pedido da por hecho, y su entrega alimenta a `analyst` y `architect`, que diseñan sobre hechos y no sobre supuestos.
 
 Si el tipo no es obvio, pregunta con la interfaz de preguntas antes de llamar a nadie. Enseña la cadena elegida en una línea.
 
