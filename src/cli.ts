@@ -18,6 +18,8 @@ Uso:
   nursery capabilities [--json]
   nursery --version`
 
+class UsageError extends Error {}
+
 function out(line: string): void {
   process.stdout.write(`${line}\n`)
 }
@@ -27,7 +29,7 @@ function readAgents(raw: string | undefined): AgentSelection {
   if (raw === 'all') return 'all'
   const names = raw.split(',').map((name) => name.trim()).filter((name) => name.length > 0)
   const unknown = names.filter((name) => !(agents.AGENTS as readonly string[]).includes(name))
-  if (unknown.length > 0) throw new Error(`Unknown agent: ${unknown.join(', ')}. Use ${agents.AGENTS.join(', ')}, all or detected.`)
+  if (unknown.length > 0) throw new UsageError(`Unknown agent: ${unknown.join(', ')}. Use ${agents.AGENTS.join(', ')}, all or detected.`)
   return names as agents.AgentName[]
 }
 
@@ -99,6 +101,12 @@ async function build(argv: string[]): Promise<number> {
   return 0
 }
 
+function errorCode(error: unknown): string {
+  if (error instanceof UsageError) return 'USAGE'
+  const code = error instanceof Error && 'code' in error ? String(error.code) : ''
+  return code.startsWith('ERR_PARSE_ARGS') ? 'USAGE' : 'UNEXPECTED'
+}
+
 export async function main(argv: readonly string[]): Promise<number> {
   const [command, ...rest] = argv
   const json = argv.includes('--json')
@@ -121,7 +129,9 @@ export async function main(argv: readonly string[]): Promise<number> {
     out(HELP)
     return help ? 0 : 2
   } catch (error) {
-    process.stderr.write(`nursery: ${error instanceof Error ? error.message : String(error)}\n`)
+    const message = error instanceof Error ? error.message : String(error)
+    if (json) writeJson(errorEnvelope(SCHEMA_VERSION, command ?? 'nursery', { code: errorCode(error), message }))
+    else process.stderr.write(`nursery: ${message}\n`)
     return 2
   }
 }

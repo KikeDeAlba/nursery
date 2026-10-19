@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { spawnSync } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -117,4 +118,30 @@ test('setup registers nursery in the kit registry and uninstall removes it', asy
   const removed = await uninstallTool(options)
   assert.equal(removed.unregistered, true)
   assert.ok(!existsSync(file))
+  assert.equal((await uninstallTool(options)).unregistered, false)
+})
+
+test('setup registers nursery even when an agent step fails', async (t) => {
+  const { homes, registry, options } = await sandbox(t)
+  await mkdir(path.dirname(homes.opencode), { recursive: true })
+  await writeFile(homes.opencode, 'not a directory')
+  const result = await setupTool(['opencode'], options)
+  assert.ok(result.steps.some((step) => step.state === 'failed'))
+  assert.ok(existsSync(path.join(registry, 'nursery.json')))
+})
+
+test('usage errors with --json come back as an error envelope with exit 2', async (t) => {
+  const { home, registry } = await sandbox(t)
+  for (const args of [['setup', '--agents', 'bogus', '--json'], ['setup', '--bogus', '--json']]) {
+    const run = spawnSync(process.execPath, [BIN, ...args], { encoding: 'utf8', env: { ...process.env, HOME: home, KIT_REGISTRY_DIR: registry } })
+    assert.equal(run.status, 2, args.join(' '))
+    const lines = run.stdout.trim().split('\n')
+    assert.equal(lines.length, 1, args.join(' '))
+    const envelope = JSON.parse(lines[0] ?? '') as { ok: boolean; command: string; error: { code: string; message: string } }
+    assert.equal(envelope.ok, false)
+    assert.equal(envelope.command, 'setup')
+    assert.equal(envelope.error.code, 'USAGE')
+    assert.ok(envelope.error.message.length > 0)
+  }
+  assert.ok(!existsSync(path.join(registry, 'nursery.json')))
 })
