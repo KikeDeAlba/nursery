@@ -1,15 +1,20 @@
 import assert from 'node:assert/strict'
+import { existsSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import path from 'node:path'
 import { test } from 'node:test'
 import { agents } from '@kikedealba/kit'
 
 const RULES_FILE = path.join(import.meta.dirname, '..', 'rules', 'RULES.md')
-const COMMAND_FILE = path.join(import.meta.dirname, '..', 'commands', 'gemini', 'nursery.md')
+const COMMAND_FILE = path.join(import.meta.dirname, '..', 'gemini', 'commands', 'nursery.md')
 
 test('the gemini rules leave plan mode and the nursery flow to /nursery', async () => {
   const rendered = agents.renderForAgent(await readFile(RULES_FILE, 'utf8'), 'gemini')
   assert.doesNotMatch(rendered, /exit_plan_mode|invoke_agent|modo plan/)
+})
+
+test('the repo root has no commands directory that the claude plugin would load', () => {
+  assert.ok(!existsSync(path.join(import.meta.dirname, '..', 'commands')), 'commands/ at the root is loaded recursively by the claude plugin')
 })
 
 test('the gemini /nursery command starts the flow and drives it to validation', async () => {

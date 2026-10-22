@@ -78,7 +78,7 @@ export async function integration(): Promise<agents.AgentIntegration> {
   }
 }
 
-export const GEMINI_COMMAND_FILE = path.join(PACKAGE_ROOT, 'commands', 'gemini', 'nursery.md')
+export const GEMINI_COMMAND_FILE = path.join(PACKAGE_ROOT, 'gemini', 'commands', 'nursery.md')
 
 export const GEMINI_HOOK_NAME = 'nursery-flow'
 

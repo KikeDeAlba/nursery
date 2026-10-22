@@ -294,7 +294,9 @@ Las pruebas fallan si:
 - un cuerpo pasa de 80 líneas o repite texto de `rules/RULES.md`;
 - el bloque de reglas pasa de 5,200 caracteres, o su sección «Delegación» no nombra
   a los diez agentes;
-- developer, devops o qa-automation no saben entregar como parte (sin push ni MR).
+- developer, devops o qa-automation no saben entregar como parte (sin push ni MR);
+- existe `commands/` en la raíz: Claude Code lo carga entero en el plugin, así
+  que el comando de Gemini vive en `gemini/commands/nursery.md`.
 
 Para probar el panel de subagentes (`hooks/`):
 
