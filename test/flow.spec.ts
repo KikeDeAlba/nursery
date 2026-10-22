@@ -256,16 +256,16 @@ describe('general', () => {
     assert.doesNotThrow(() => step(s, bad, LATER, ENV))
   })
 
-  test('failResult denies only risky tools', () => {
+  test('failResult allows only reads, questions, free tools and read agents', () => {
     const reasonText = 'El estado del flujo de nursery no se pudo leer. Vuelve a lanzar /nursery o desactívalo con NURSERY_FLOW=off.'
-    for (const event of [beforeTool('write_file'), beforeTool('replace'), beforeTool('run_shell_command'), beforeTool('invoke_agent', agentCall('developer')), beforeTool('mcp_jira_createIssue')]) {
+    for (const event of [beforeTool('write_file'), beforeTool('replace'), beforeTool('run_shell_command'), beforeTool('invoke_agent', agentCall('developer')), beforeTool('mcp_jira_createIssue'), beforeTool('save_memory'), beforeTool('enter_plan_mode'), beforeTool('invoke_agent', agentCall('unknown'))]) {
       denied(failResult(event), reasonText)
     }
     for (const event of [beforeTool('read_file'), beforeTool('invoke_agent', agentCall('researcher')), beforeTool('mcp_jira_getIssue'), beforeTool('ask_user'), beforeAgent('x'), afterAgent()]) {
       assert.deepEqual(failResult(event), {})
     }
     const malformed = { ...BASE, hook_event_name: 'BeforeTool', tool_name: 'invoke_agent', tool_input: null } as unknown as HookEvent
-    assert.deepEqual(failResult(malformed), {})
+    denied(failResult(malformed), reasonText)
   })
 })
 
@@ -501,9 +501,15 @@ describe('BeforeTool before acceptance', () => {
     denied(run(state({ ...full, researched: true }), beforeTool('read_file')).result, `Ya tienes la entrega del researcher. Pregunta tus dudas y presenta la propuesta ${Q}.`)
   })
 
-  test('isMcpRead reads the first verb after the server and denies any write verb', () => {
+  test('isMcpRead needs a read verb and no write or mixed verb anywhere in the tool name', () => {
     for (const tool of ['mcp_a_getIssue', 'mcp_a_get', 'mcp_a__search', 'mcp_a_b_listSites', 'mcp_a_view-page', 'mcp_atl_jira_get_issue', 'mcp_atl_jira_comments', 'mcp_atl_api_describe', 'mcp_atl_api_search', 'mcp_elastic-logs_search_logs', 'mcp_elastic-logs_get_log_trace', 'mcp_gitlab_list_merge_requests']) assert.equal(isMcpRead(tool), true, tool)
-    for (const tool of ['getIssue', 'mcp_a_createIssue', 'mcp_a_findings', 'mcp_a_showcase', 'mcp_a_get_and_delete', 'mcp_atl_api_call', 'mcp_atl_jira_add_comment', 'mcp_gitlab_merge_merge_request', 'mcp_get_x', 'mcp_', 'mcp_a_']) assert.equal(isMcpRead(tool), false, tool)
+    for (const tool of ['getIssue', 'mcp_a_createIssue', 'mcp_a_findings', 'mcp_a_showcase', 'mcp_a_get_and_delete', 'mcp_atl_api_call', 'mcp_atl_jira_add_comment', 'mcp_gitlab_merge_merge_request', 'mcp_get_x', 'mcp_', 'mcp_a_', 'mcp_gh_get_and_merge', 'mcp_x_search_and_push', 'mcp_x_list_then_close', 'mcp_x_get_and_restart', 'mcp_github_search_and_replace', 'mcp_slack_search_and_reply', 'mcp_jira_get_and_resolve', 'mcp_gh_list_and_save', 'mcp_x_get_and_exec', 'mcp_pg_query']) assert.equal(isMcpRead(tool), false, tool)
+  })
+
+  test('isMcpRead prefers the server tool name from mcp_context', () => {
+    assert.equal(isMcpRead('mcp_code_search_purge_cache', 'purge_cache'), false)
+    assert.equal(isMcpRead('mcp_code_search_get_index', 'get_index'), true)
+    assert.equal(isMcpRead('mcp_my_server_list_items', 'list_items'), true)
   })
 })
 

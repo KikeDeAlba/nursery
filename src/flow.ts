@@ -16,9 +16,9 @@ import type {
 
 export const MARKER = '[nursery-flow]'
 export const READ_TOOLS: readonly string[] = ['read_file', 'read_many_files', 'grep_search', 'glob', 'list_directory', 'google_web_search', 'web_fetch']
-export const MCP_READ_VERBS: readonly string[] = ['get', 'search', 'list', 'read', 'describe', 'view', 'query', 'fetch', 'find', 'show', 'comments', 'sites', 'count', 'check', 'inspect']
+export const MCP_READ_VERBS: readonly string[] = ['get', 'search', 'list', 'read', 'describe', 'view', 'fetch', 'find', 'show', 'comments', 'sites', 'count', 'check', 'inspect']
 export const MCP_WRITE_VERBS: readonly string[] = ['create', 'update', 'delete', 'remove', 'add', 'set', 'transition', 'post', 'put', 'patch', 'call', 'write', 'edit', 'upload', 'send', 'publish', 'execute', 'run', 'trigger', 'deploy', 'insert', 'rename', 'archive', 'assign', 'approve', 'worklog']
-export const MCP_MIXED_VERBS: readonly string[] = ['merge', 'close', 'move', 'cancel', 'restart', 'start', 'stop', 'apply', 'commit', 'push']
+export const MCP_MIXED_VERBS: readonly string[] = ['merge', 'close', 'move', 'cancel', 'restart', 'start', 'stop', 'apply', 'commit', 'push', 'replace', 'reply', 'resolve', 'save', 'submit', 'kill', 'reset', 'sync', 'import', 'exec', 'invoke', 'clear', 'revoke', 'grant', 'overwrite', 'mark', 'drop', 'purge', 'query', 'sql', 'mutate', 'mutation', 'modify', 'change', 'enable', 'disable', 'install', 'uninstall', 'lock', 'unlock', 'link', 'unlink', 'attach', 'detach', 'comment', 'react', 'vote', 'star', 'fork', 'tag', 'label', 'schedule', 'notify', 'email', 'message', 'invite', 'share', 'transfer', 'pay', 'refund', 'charge']
 export const FREE_TOOLS: readonly string[] = ['update_topic', 'write_todos', 'activate_skill']
 export const READ_AGENTS: readonly string[] = ['researcher', 'analyst', 'architect', 'security', 'code-reviewer', 'sre']
 export const WORK_AGENTS: readonly string[] = ['developer', 'devops', 'qa-automation', 'documenter']
@@ -81,17 +81,20 @@ function truncate(text: string, max: number): string {
   return text.length > max ? `${text.slice(0, max - 1)}…` : text
 }
 
-export function isMcpRead(tool: string): boolean {
+export function isMcpRead(tool: string, serverToolName?: string): boolean {
   if (!tool.startsWith('mcp_')) return false
-  const [, , ...rest] = tool.split('_')
-  const words = rest.join('_').replace(/([a-z0-9])([A-Z])/g, '$1_$2').toLowerCase().split(/[^a-z0-9]+/).filter(Boolean)
-  if (words.some((word) => MCP_WRITE_VERBS.includes(word))) return false
-  const verb = words.find((word) => MCP_READ_VERBS.includes(word) || MCP_MIXED_VERBS.includes(word))
-  return verb !== undefined && MCP_READ_VERBS.includes(verb)
+  const name = serverToolName ?? tool.split('_').slice(2).join('_')
+  const words = name.replace(/([a-z0-9])([A-Z])/g, '$1_$2').toLowerCase().replace(/merge[^a-z0-9]+requests?/g, 'mr').split(/[^a-z0-9]+/).filter(Boolean)
+  if (words.some((word) => MCP_WRITE_VERBS.includes(word) || MCP_MIXED_VERBS.includes(word))) return false
+  return words.some((word) => MCP_READ_VERBS.includes(word))
 }
 
-function isReadTool(tool: string): boolean {
-  return READ_TOOLS.includes(tool) || tool === SEARCH_TOOL || isMcpRead(tool)
+function mcpToolName(event: { mcp_context?: unknown }): string | undefined {
+  return isRecord(event.mcp_context) && typeof event.mcp_context['tool_name'] === 'string' ? event.mcp_context['tool_name'] : undefined
+}
+
+function isReadTool(tool: string, event: { mcp_context?: unknown }): boolean {
+  return READ_TOOLS.includes(tool) || tool === SEARCH_TOOL || isMcpRead(tool, mcpToolName(event))
 }
 
 export function isFlowStart(prompt: string): boolean {
@@ -326,7 +329,7 @@ function beforeToolExplore(state: FlowState, event: BeforeToolEvent, now: Date):
   if (tool === 'ask_user') return proposal(state, event, now)
   if (WRITE_TOOLS.includes(tool)) return out(state, deny(REASON.writeBefore))
   if (tool === 'run_shell_command') return out(state, deny(REASON.shell))
-  if (isReadTool(tool)) {
+  if (isReadTool(tool, event)) {
     if (agents > 0) return out(state)
     if (state.reads.used < state.reads.limit) return out(patch(state, { reads: { ...state.reads, used: state.reads.used + 1 } }, now))
     return out(state, deny(readsReason(state)))
@@ -469,11 +472,11 @@ export function failResult(event: HookEvent): HookResult {
   if (!isRecord(event) || event.hook_event_name !== 'BeforeTool') return NONE
   const tool = asString(event.tool_name)
   const input = isRecord(event.tool_input) ? event.tool_input : {}
-  const risky = WRITE_TOOLS.includes(tool)
-    || tool === 'run_shell_command'
-    || (tool === 'invoke_agent' && WORK_AGENTS.includes(asString(input['agent_name'])))
-    || (tool.startsWith('mcp_') && !isMcpRead(tool))
-  return risky ? deny(REASON.unreadable) : NONE
+  const safe = isReadTool(tool, event)
+    || tool === 'ask_user'
+    || FREE_TOOLS.includes(tool)
+    || (tool === 'invoke_agent' && READ_AGENTS.includes(asString(input['agent_name'])))
+  return safe ? NONE : deny(REASON.unreadable)
 }
 
 export function step(state: FlowState | null, event: HookEvent, now: Date, env: FlowEnv): StepOutput {

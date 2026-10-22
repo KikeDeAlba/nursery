@@ -11,7 +11,7 @@ export interface FlowState {
 export interface FlowEnv { off: boolean; plansDir: string; project: string }
 interface HookBase { session_id: string; cwd: string; transcript_path?: string; timestamp?: string }
 export interface BeforeAgentEvent extends HookBase { hook_event_name: 'BeforeAgent'; prompt: string }
-export interface BeforeToolEvent extends HookBase { hook_event_name: 'BeforeTool'; tool_name: string; tool_input: Record<string, unknown> }
+export interface BeforeToolEvent extends HookBase { hook_event_name: 'BeforeTool'; tool_name: string; tool_input: Record<string, unknown>; mcp_context?: unknown }
 export interface ToolResponse { llmContent?: unknown; returnDisplay?: unknown; error?: unknown }
 export interface AfterToolEvent extends HookBase { hook_event_name: 'AfterTool'; tool_name: string; tool_input: Record<string, unknown>; tool_response: ToolResponse }
 export interface AfterAgentEvent extends HookBase { hook_event_name: 'AfterAgent'; prompt: string; prompt_response: string; stop_hook_active?: boolean }

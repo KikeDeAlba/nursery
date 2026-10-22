@@ -147,10 +147,13 @@ Antes de aceptar, todo lo que no sea leer, preguntar o delegar a agentes de
 lectura se bloquea: escribir archivos, el shell (también mientras corre un
 subagente), invocar a `developer`, `devops`, `qa-automation` o `documenter`,
 entrar o salir del modo plan, cualquier herramienta desconocida y las de MCP que
-no sean de lectura. Una herramienta MCP cuenta como lectura si el último
-segmento de su nombre empieza con un verbo de lectura (`get`, `search`, `list`,
-`read`, `describe`, `view`, `query`, `fetch`, `find`, `show`, `comments`,
-`sites` o `count`), y gasta lecturas del tope como las demás. También se
+no sean de lectura. Una herramienta MCP cuenta como lectura si su nombre en el
+servidor (`mcp_context.tool_name`) lleva un verbo de lectura (`get`, `search`,
+`list`, `read`, `describe`, `view`, `fetch`, `find`, `show`, `comments`, `sites`,
+`count`, `check` o `inspect`) y ninguno que pueda escribir o ejecutar (`create`,
+`update`, `delete`, `call`, `merge`, `push`, `query`, `exec`, `save`…); gasta
+lecturas del tope como las demás. Si el estado del flujo no se puede leer, solo
+se permiten lecturas, preguntas y agentes de lectura. También se
 bloquea leer más allá del tope y presentar una propuesta con otro formato. Al
 negar, el motivo dice qué hacer en su lugar.
 
