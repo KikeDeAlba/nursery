@@ -4,6 +4,7 @@ import { parseArgs } from 'node:util'
 import { agents } from '@kikedealba/kit'
 import { ENVELOPE_VERSION, errorEnvelope, successEnvelope, writeJson } from '@kikedealba/kit/envelope'
 import { agentNames, buildAgents, staleAgents, writeAgents, AGENTS_DIR, SUBAGENTS_DIR } from './build.ts'
+import { runGeminiHook } from './hooks/gemini-hook.ts'
 import { CAPABILITIES, TOOL, checkMemory, setupTool, uninstallTool, type AgentSelection } from './setup.ts'
 import { SCHEMA_VERSION, VERSION } from './version.ts'
 
@@ -101,6 +102,23 @@ async function build(argv: string[]): Promise<number> {
   return 0
 }
 
+async function readStdin(): Promise<string> {
+  const chunks: Buffer[] = []
+  for await (const chunk of process.stdin) chunks.push(typeof chunk === 'string' ? Buffer.from(chunk) : chunk)
+  return Buffer.concat(chunks).toString('utf8')
+}
+
+async function geminiHook(argv: readonly string[]): Promise<number> {
+  let result: unknown = {}
+  try {
+    result = await runGeminiHook(argv[0] ?? '', await readStdin())
+  } catch (error) {
+    process.stderr.write(`nursery gemini-hook: ${error instanceof Error ? error.message : String(error)}\n`)
+  }
+  process.stdout.write(`${JSON.stringify(result)}\n`)
+  return 0
+}
+
 function errorCode(error: unknown): string {
   if (error instanceof UsageError) return 'USAGE'
   const code = error instanceof Error && 'code' in error ? String(error.code) : ''
@@ -109,6 +127,7 @@ function errorCode(error: unknown): string {
 
 export async function main(argv: readonly string[]): Promise<number> {
   const [command, ...rest] = argv
+  if (command === 'gemini-hook') return geminiHook(rest)
   const json = argv.includes('--json')
   try {
     if (command === '--version' || command === '-v') {
