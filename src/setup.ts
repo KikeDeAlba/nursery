@@ -5,6 +5,7 @@ import { agents } from '@kikedealba/kit'
 import { platformContext, type PlatformContext } from '@kikedealba/kit/platform'
 import { defineManifest, registerTool, stableBin, unregisterTool, type ToolManifest } from '@kikedealba/kit/registry'
 import { RULES_FILE, SUBAGENTS_DIR, agentNames } from './build.ts'
+import { HOOK_EVENTS, type HookEventName } from './flow-types.ts'
 import { PACKAGE_ROOT, VERSION } from './version.ts'
 
 export const TOOL = 'nursery'
@@ -74,6 +75,42 @@ export async function integration(): Promise<agents.AgentIntegration> {
     subagents: (await agentNames(SUBAGENTS_DIR)).map((name) => ({ name, file: path.join(SUBAGENTS_DIR, `${name}.md`) })),
     userSkills: [{ name: 'nursery', dir: path.join(PACKAGE_ROOT, 'skills', 'nursery') }],
     memory: RULES_FILE,
+  }
+}
+
+export const GEMINI_COMMAND_FILE = path.join(PACKAGE_ROOT, 'gemini', 'commands', 'nursery.md')
+
+export const GEMINI_HOOK_NAME = 'nursery-flow'
+
+export const GEMINI_HOOK_TIMEOUT_MS = 10000
+
+export const GEMINI_HOOK_MATCHERS: Partial<Record<HookEventName, string>> = {
+  BeforeTool: '.*',
+  AfterTool: '^(invoke_agent|ask_user)$',
+}
+
+export function shellCommand(parts: readonly string[], platform: PlatformContext['platform']): string {
+  if (platform === 'win32') return `& ${parts.map((part) => `'${part.replace(/['‘’‚‛]/g, (m) => m + m)}'`).join(' ')}`
+  return parts.map((part) => `'${part.replace(/'/g, `'\\''`)}'`).join(' ')
+}
+
+export async function geminiHooks(ctx: PlatformContext = platformContext()): Promise<agents.HookMap> {
+  const bin = shellCommand(binCommand(), ctx.platform)
+  const hooks: agents.HookMap = {}
+  for (const event of HOOK_EVENTS) {
+    const matcher = GEMINI_HOOK_MATCHERS[event]
+    const hook: agents.HookCommand = { type: 'command', name: GEMINI_HOOK_NAME, command: `${bin} gemini-hook ${event}`, timeout: GEMINI_HOOK_TIMEOUT_MS }
+    hooks[event] = [matcher === undefined ? { hooks: [hook] } : { matcher, hooks: [hook] }]
+  }
+  return hooks
+}
+
+export async function geminiIntegration(ctx?: PlatformContext): Promise<agents.AgentIntegration> {
+  const { userSkills: _userSkills, ...base } = await integration()
+  return {
+    ...base,
+    commands: [{ name: 'nursery', file: GEMINI_COMMAND_FILE }],
+    gemini: { hooks: await geminiHooks(ctx) },
   }
 }
 
@@ -149,6 +186,16 @@ async function resolveSelection(selection: AgentSelection, options: agents.Insta
   return [...selection]
 }
 
+async function installSplit(full: agents.AgentIntegration, targets: readonly MemoryAgent[], blocked: ReadonlySet<MemoryAgent>, options: SetupOptions): Promise<agents.Step[]> {
+  const steps: agents.Step[] = []
+  const open = targets.filter((agent) => !blocked.has(agent))
+  const closed = targets.filter((agent) => blocked.has(agent))
+  if (open.length > 0) steps.push(...(await agents.installIntegration(full, { ...options, agents: open })))
+  const { memory: _memory, ...withoutMemory } = full
+  if (closed.length > 0) steps.push(...(await agents.installIntegration(withoutMemory, { ...options, agents: closed })))
+  return steps
+}
+
 export async function installAgents(selection: AgentSelection, options: SetupOptions = {}): Promise<agents.Step[]> {
   const targets = (await resolveSelection(selection, options)).filter((agent): agent is MemoryAgent => agent !== 'claude-desktop')
   const steps: agents.Step[] = []
@@ -163,15 +210,9 @@ export async function installAgents(selection: AgentSelection, options: SetupOpt
     steps.push(...(await agents.installClaudePlugin(CLAUDE_PLUGIN, options)))
     if (!blocked.has('claude')) steps.push(...(await agents.installIntegration(memoryIntegration(), { ...options, agents: ['claude'] })))
   }
-  const others = targets.filter((agent) => agent !== 'claude')
-  if (others.length > 0) {
-    const full = await integration()
-    const open = others.filter((agent) => !blocked.has(agent))
-    const closed = others.filter((agent) => blocked.has(agent))
-    if (open.length > 0) steps.push(...(await agents.installIntegration(full, { ...options, agents: open })))
-    const { memory: _memory, ...withoutMemory } = full
-    if (closed.length > 0) steps.push(...(await agents.installIntegration(withoutMemory, { ...options, agents: closed })))
-  }
+  const others = targets.filter((agent) => agent === 'opencode' || agent === 'codex')
+  if (others.length > 0) steps.push(...(await installSplit(await integration(), others, blocked, options)))
+  if (targets.includes('gemini')) steps.push(...(await installSplit(await geminiIntegration(options.ctx), ['gemini'], blocked, options)))
   if (targets.includes('gemini')) steps.push(await installGeminiPolicy(options))
   return steps
 }
@@ -180,7 +221,8 @@ export async function uninstallAgents(options: agents.InstallOptions = {}): Prom
   const steps: agents.Step[] = []
   steps.push(...(await agents.uninstallClaudePlugin(CLAUDE_PLUGIN, options)))
   steps.push(...(await agents.uninstallIntegration(memoryIntegration(), { ...options, agents: ['claude'] })))
-  steps.push(...(await agents.uninstallIntegration(await integration(), { ...options, agents: ['opencode', 'codex', 'gemini'] })))
+  steps.push(...(await agents.uninstallIntegration(await integration(), { ...options, agents: ['opencode', 'codex'] })))
+  steps.push(...(await agents.uninstallIntegration(await geminiIntegration(options.ctx), { ...options, agents: ['gemini'] })))
   const policy = await uninstallGeminiPolicy(options)
   if (policy) steps.push(policy)
   return steps

@@ -1,34 +1,30 @@
 import assert from 'node:assert/strict'
+import { existsSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import path from 'node:path'
 import { test } from 'node:test'
 import { agents } from '@kikedealba/kit'
 
 const RULES_FILE = path.join(import.meta.dirname, '..', 'rules', 'RULES.md')
-const GEMINI_ONLY = /invoke_agent|exit_plan_mode/
+const COMMAND_FILE = path.join(import.meta.dirname, '..', 'gemini', 'commands', 'nursery.md')
 
-test('the gemini rules make plan mode delegate and close the plan', async () => {
+test('the gemini rules leave plan mode and the nursery flow to /nursery', async () => {
   const rendered = agents.renderForAgent(await readFile(RULES_FILE, 'utf8'), 'gemini')
-  assert.match(rendered, /invoke_agent/)
-  assert.match(rendered, /exit_plan_mode/)
+  assert.doesNotMatch(rendered, /exit_plan_mode|invoke_agent|modo plan/)
 })
 
-test('the gemini rules delegate research in parallel and build on the handoff in any mode', async () => {
-  const rendered = agents.renderForAgent(await readFile(RULES_FILE, 'utf8'), 'gemini')
-  const lines = rendered.split('\n').filter((line) => /invoke_agent|entrega|exit_plan_mode|codebase_investigator/.test(line))
-  const research = lines.find((line) => line.includes('invoke_agent'))
-  assert.match(research ?? '', /varias invocaciones en la misma respuesta/)
-  assert.match(research ?? '', /3 preguntas/)
-  assert.ok(lines.some((line) => /entrega/.test(line) && /no releas/.test(line)), 'the handoff is not the base')
-  assert.ok(lines.some((line) => /Tras la entrega, 10 llamadas/.test(line)), 'no call budget after the handoff')
-  for (const line of lines) assert.doesNotMatch(line, /^- En modo plan/, line)
+test('the repo root has no commands directory that the claude plugin would load', () => {
+  assert.ok(!existsSync(path.join(import.meta.dirname, '..', 'commands')), 'commands/ at the root is loaded recursively by the claude plugin')
 })
 
-test('the gemini plan mode guidance stays out of the other agents', async () => {
-  const rules = await readFile(RULES_FILE, 'utf8')
-  for (const agent of ['claude', 'codex', 'opencode'] as const) {
-    assert.doesNotMatch(agents.renderForAgent(rules, agent), GEMINI_ONLY, agent)
+test('the gemini /nursery command starts the flow and drives it to validation', async () => {
+  const command = await readFile(COMMAND_FILE, 'utf8')
+  const body = command.replace(/^---\n[\s\S]*?\n---\n/, '')
+  assert.ok(body.startsWith('[nursery-flow]'), 'the body does not start with the flow marker')
+  for (const text of ['$ARGUMENTS', 'ask_user', 'Propuesta', 'Aceptar', 'Corregir', 'qa-automation', 'code-reviewer']) {
+    assert.ok(command.includes(text), text)
   }
+  assert.doesNotMatch(command, /Claude|Anthropic|Codex|OpenAI|opencode/)
 })
 
 const POLICY_FILE = path.join(import.meta.dirname, '..', 'rules', 'gemini-plan.toml')
