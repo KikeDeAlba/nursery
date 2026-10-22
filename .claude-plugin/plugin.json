@@ -1,7 +1,7 @@
 {
   "name": "nursery",
   "description": "Specialist subagents (researcher, analyst, architect, developer, QA automation, DevOps, SRE, security, code review, docs) that follow one shared set of working rules, /nursery to run them as a chain, and a live panel that shows what each subagent is doing",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "author": {
     "name": "Jesus Enrique De Alba Gaytan",
     "url": "https://github.com/KikeDeAlba"
