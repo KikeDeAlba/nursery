@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { existsSync } from 'node:fs'
-import { mkdir, mkdtemp, readdir, readFile, rm, utimes, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readdir, readFile, rm, stat, utimes, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { test } from 'node:test'
@@ -58,6 +58,20 @@ test('saveState writes atomically and loadState reads it back', async (t) => {
   await saveState(file, next)
   assert.deepEqual(await loadState(file), next)
   assert.deepEqual(await readdir(path.dirname(file)), ['s1.json'])
+})
+
+test('saveState keeps the state private to the user', { skip: process.platform === 'win32' }, async (t) => {
+  const dir = await sandbox(t)
+  const file = statePath(path.join(dir, 'nested', 'flow'), 's1')
+  const previous = process.umask(0o022)
+  try {
+    await saveState(file, sampleState('s1'))
+  } finally {
+    process.umask(previous)
+  }
+  assert.equal((await stat(file)).mode & 0o777, 0o600)
+  assert.equal((await stat(path.dirname(file))).mode & 0o777, 0o700)
+  assert.equal((await stat(path.join(dir, 'nested'))).mode & 0o777, 0o700)
 })
 
 test('loadState returns null for a missing, corrupt, other-version or other-session file', async (t) => {
@@ -142,4 +156,51 @@ test('withSessionLock gives up after the timeout while a fresh lock is held', as
   assert.equal(ran, false)
   assert.ok(existsSync(`${file}.lock`))
   assert.equal(await readFile(path.join(dir, 's1.json'), 'utf8').catch(() => null), null)
+})
+
+test('withSessionLock writes its own token and leaves a lock it no longer owns', async (t) => {
+  const dir = await sandbox(t)
+  const file = statePath(dir, 's1')
+  const lock = `${file}.lock`
+  let token = ''
+  await withSessionLock(file, async () => {
+    token = await readFile(path.join(lock, 'owner'), 'utf8')
+    assert.match(token, new RegExp(`^${process.pid}-[0-9a-f]{16}$`))
+    if (process.platform !== 'win32') assert.equal((await stat(lock)).mode & 0o777, 0o700)
+  })
+  assert.ok(!existsSync(lock))
+
+  await withSessionLock(file, async () => {
+    await rm(lock, { recursive: true, force: true })
+    await mkdir(lock)
+    await writeFile(path.join(lock, 'owner'), 'someone-else')
+  })
+  assert.ok(existsSync(lock), 'a lock owned by another process was removed')
+  assert.equal(await readFile(path.join(lock, 'owner'), 'utf8'), 'someone-else')
+
+  const other = await withSessionLock(file, async () => readFile(path.join(lock, 'owner'), 'utf8'), { timeoutMs: 50, staleMs: 10_000 }).catch((error: Error) => error.message)
+  assert.match(String(other), /timed out/)
+})
+
+test('two waiters on a stale lock break it once and run one at a time', async (t) => {
+  const dir = await sandbox(t)
+  const file = statePath(dir, 's1')
+  const lock = `${file}.lock`
+  await mkdir(lock)
+  await writeFile(path.join(lock, 'owner'), 'dead')
+  const old = new Date(Date.now() - 60_000)
+  await utimes(lock, old, old)
+  let inside = 0
+  let overlap = false
+  const run = () =>
+    withSessionLock(file, async () => {
+      inside += 1
+      if (inside > 1) overlap = true
+      await new Promise((resolve) => setTimeout(resolve, 30))
+      inside -= 1
+    }, { timeoutMs: 1000, staleMs: 10_000 })
+  await Promise.all([run(), run(), run()])
+  assert.equal(overlap, false)
+  assert.ok(!existsSync(lock))
+  assert.deepEqual((await readdir(dir)).filter((name) => name.includes('.stale')), [])
 })

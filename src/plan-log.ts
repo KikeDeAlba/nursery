@@ -3,6 +3,7 @@ import { existsSync, readFileSync, statSync } from 'node:fs'
 import { appendFile, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import type { Phase, PlanLogEntry } from './flow-types.ts'
+import { DIR_MODE, FILE_MODE } from './flow-store.ts'
 import { MAX_VALIDATION_RETRIES } from './flow.ts'
 
 export const PHASE_LABEL: Record<Phase | 'replaced', string> = {
@@ -107,7 +108,7 @@ function createText(entry: Extract<PlanLogEntry, { kind: 'create' }>): string {
 async function writeAtomic(file: string, text: string): Promise<void> {
   const tmp = `${file}.${process.pid}.${randomBytes(6).toString('hex')}.tmp`
   try {
-    await writeFile(tmp, text)
+    await writeFile(tmp, text, { mode: FILE_MODE })
     await rename(tmp, file)
   } catch (error) {
     await rm(tmp, { force: true })
@@ -139,11 +140,13 @@ async function applyEntry(entry: PlanLogEntry): Promise<void> {
   switch (entry.kind) {
     case 'create': {
       if (existsSync(entry.file)) {
-        await appendFile(entry.file, `\n## Reinicio (${clock(entry.at)})\n\n${entry.request.trim()}\n`)
+        const text = await readFile(entry.file, 'utf8')
+        const restarted = text.replace(/^- Fase: .*$/m, `- Fase: ${PHASE_LABEL.explore}`)
+        await writeAtomic(entry.file, `${restarted}\n## Reinicio (${clock(entry.at)})\n\n${entry.request.trim()}\n`)
         return
       }
-      await mkdir(path.dirname(entry.file), { recursive: true })
-      await writeFile(entry.file, createText(entry))
+      await mkdir(path.dirname(entry.file), { recursive: true, mode: DIR_MODE })
+      await writeFile(entry.file, createText(entry), { mode: FILE_MODE })
       return
     }
     case 'phase': {
@@ -152,25 +155,25 @@ async function applyEntry(entry: PlanLogEntry): Promise<void> {
       return
     }
     case 'proposal':
-      await appendFile(entry.file, `\n### Propuesta v${entry.version} (${clock(entry.at)})\n\n${entry.text}\n`)
+      await appendFile(entry.file, `\n### Propuesta v${entry.version} (${clock(entry.at)})\n\n${entry.text}\n`, { mode: FILE_MODE })
       return
     case 'accepted':
-      await appendFile(entry.file, `\n### Aceptada (${clock(entry.at)}${via(entry.via)})\n\n`)
+      await appendFile(entry.file, `\n### Aceptada (${clock(entry.at)}${via(entry.via)})\n\n`, { mode: FILE_MODE })
       return
     case 'correction':
-      await appendFile(entry.file, `\n### Corrección del usuario (${clock(entry.at)}${via(entry.via)})\n\n${entry.text.length > 0 ? entry.text : '(sin detalle)'}\n`)
+      await appendFile(entry.file, `\n### Corrección del usuario (${clock(entry.at)}${via(entry.via)})\n\n${entry.text.length > 0 ? entry.text : '(sin detalle)'}\n`, { mode: FILE_MODE })
       return
     case 'dismissed':
-      await appendFile(entry.file, `\n### Diálogo cerrado sin respuesta (${clock(entry.at)})\n`)
+      await appendFile(entry.file, `\n### Diálogo cerrado sin respuesta (${clock(entry.at)})\n`, { mode: FILE_MODE })
       return
     case 'agent':
-      await appendFile(entry.file, agentLine(entry))
+      await appendFile(entry.file, agentLine(entry), { mode: FILE_MODE })
       return
     case 'validation':
-      await appendFile(entry.file, validationLine(entry))
+      await appendFile(entry.file, validationLine(entry), { mode: FILE_MODE })
       return
     case 'replaced':
-      await appendFile(entry.file, `\n### Reemplazado por un /nursery nuevo (${clock(entry.at)})\n`)
+      await appendFile(entry.file, `\n### Reemplazado por un /nursery nuevo (${clock(entry.at)})\n`, { mode: FILE_MODE })
       return
   }
 }

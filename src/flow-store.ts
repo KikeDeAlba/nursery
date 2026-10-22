@@ -7,6 +7,9 @@ import type { FlowState } from './flow-types.ts'
 const SESSION_ID = /^[A-Za-z0-9._-]{1,128}$/
 
 const LOCK_RETRY_MS = 20
+const LOCK_OWNER = 'owner'
+export const FILE_MODE = 0o600
+export const DIR_MODE = 0o700
 
 export function flowDir(geminiHome: string): string {
   return path.join(geminiHome, 'tmp', 'nursery-flow')
@@ -53,10 +56,10 @@ export async function loadState(file: string, plansDir?: string): Promise<FlowSt
 }
 
 export async function saveState(file: string, state: FlowState): Promise<void> {
-  await mkdir(path.dirname(file), { recursive: true })
+  await mkdir(path.dirname(file), { recursive: true, mode: DIR_MODE })
   const tmp = `${file}.${process.pid}.${randomBytes(6).toString('hex')}.tmp`
   try {
-    await writeFile(tmp, `${JSON.stringify(state, null, 2)}\n`)
+    await writeFile(tmp, `${JSON.stringify(state, null, 2)}\n`, { mode: FILE_MODE })
     await rename(tmp, file)
   } catch (error) {
     await rm(tmp, { force: true })
@@ -69,21 +72,57 @@ export interface LockOptions {
   staleMs?: number
 }
 
+async function lockOwner(lock: string): Promise<string | null> {
+  try {
+    return await readFile(path.join(lock, LOCK_OWNER), 'utf8')
+  } catch {
+    return null
+  }
+}
+
+async function acquire(lock: string, token: string): Promise<boolean> {
+  try {
+    await mkdir(lock, { mode: DIR_MODE })
+  } catch (error) {
+    if (errorCode(error) === 'EEXIST') return false
+    throw error
+  }
+  await writeFile(path.join(lock, LOCK_OWNER), token, { mode: FILE_MODE })
+  return true
+}
+
+async function breakStale(lock: string, token: string, staleMs: number): Promise<void> {
+  const grave = `${lock}.${token}.stale`
+  try {
+    await rename(lock, grave)
+  } catch (error) {
+    if (errorCode(error) === 'ENOENT') return
+    throw error
+  }
+  const info = await stat(grave)
+  if (Date.now() - info.mtimeMs <= staleMs) {
+    try {
+      await rename(grave, lock)
+      return
+    } catch {
+      await rm(grave, { recursive: true, force: true })
+      return
+    }
+  }
+  await rm(grave, { recursive: true, force: true })
+}
+
 export async function withSessionLock<T>(file: string, fn: () => Promise<T>, { timeoutMs = 4000, staleMs = 10000 }: LockOptions = {}): Promise<T> {
   const lock = `${file}.lock`
-  await mkdir(path.dirname(file), { recursive: true })
+  const token = `${process.pid}-${randomBytes(8).toString('hex')}`
+  await mkdir(path.dirname(file), { recursive: true, mode: DIR_MODE })
   const started = Date.now()
   for (;;) {
-    try {
-      await mkdir(lock)
-      break
-    } catch (error) {
-      if (errorCode(error) !== 'EEXIST') throw error
-    }
+    if (await acquire(lock, token)) break
     try {
       const info = await stat(lock)
       if (Date.now() - info.mtimeMs > staleMs) {
-        await rm(lock, { recursive: true, force: true })
+        await breakStale(lock, token, staleMs)
         continue
       }
     } catch (error) {
@@ -96,6 +135,6 @@ export async function withSessionLock<T>(file: string, fn: () => Promise<T>, { t
   try {
     return await fn()
   } finally {
-    await rm(lock, { recursive: true, force: true })
+    if ((await lockOwner(lock)) === token) await rm(lock, { recursive: true, force: true })
   }
 }

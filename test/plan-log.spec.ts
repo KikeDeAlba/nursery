@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { existsSync } from 'node:fs'
-import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { test } from 'node:test'
@@ -96,8 +96,31 @@ test('create writes the plan header and a second create appends a restart', asyn
     `# Agrega el endpoint de pagos\n\n- Fase: explorar\n- Inicio: 2026-10-22 09:05\n- Repo: shop (${repo})\n- Rama: develop\n- Sesión: s1\n\n## Pedido\n\n${request}\n\n## Bitácora\n`,
   )
 
+  await applyPlanLog([{ kind: 'phase', file, phase: 'accepted' }])
   await applyPlanLog([{ kind: 'create', file, at: LATER, request: 'otra vez', cwd: repo, sessionId: 's1' }])
-  assert.match(await readFile(file, 'utf8'), /## Bitácora\n\n## Reinicio \(14:30\)\n\notra vez\n$/)
+  const restarted = await readFile(file, 'utf8')
+  assert.match(restarted, /## Bitácora\n\n## Reinicio \(14:30\)\n\notra vez\n$/)
+  assert.match(restarted, /\n- Fase: explorar\n/)
+  assert.doesNotMatch(restarted, /aceptada/)
+  assert.deepEqual(await readdir(path.dirname(file)), ['plan.md'])
+})
+
+test('the plan log is private to the user', { skip: process.platform === 'win32' }, async (t) => {
+  const root = await sandbox(t)
+  const dir = path.join(root, 'plans', 'shop')
+  const file = path.join(dir, 'plan.md')
+  const previous = process.umask(0o022)
+  try {
+    await applyPlanLog([{ kind: 'create', file, at: AT, request: 'x', cwd: root, sessionId: 's1' }])
+    await applyPlanLog([{ kind: 'phase', file, phase: 'proposed' }])
+    await applyPlanLog([{ kind: 'create', file: path.join(dir, 'other.md'), at: AT, request: 'y', cwd: root, sessionId: 's1' }])
+    await applyPlanLog([{ kind: 'dismissed', file: path.join(dir, 'appended.md'), at: AT }])
+  } finally {
+    process.umask(previous)
+  }
+  for (const name of ['plan.md', 'other.md', 'appended.md']) assert.equal((await stat(path.join(dir, name))).mode & 0o777, 0o600, name)
+  assert.equal((await stat(dir)).mode & 0o777, 0o700)
+  assert.equal((await stat(path.join(root, 'plans'))).mode & 0o777, 0o700)
 })
 
 test('create without request or git uses the fallback texts and cuts the title at 80 characters', async (t) => {
