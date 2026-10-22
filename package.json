@@ -39,6 +39,7 @@
     "subagents",
     "rules",
     "skills",
+    "commands",
     "hooks",
     "!hooks/*.test.ts",
     "types",

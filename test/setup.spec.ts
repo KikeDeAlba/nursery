@@ -9,7 +9,7 @@ import { test } from 'node:test'
 import { agents } from '@kikedealba/kit'
 import { assertConformance } from '@kikedealba/kit/conformance'
 import { platformContext } from '@kikedealba/kit/platform'
-import { CAPABILITIES, GEMINI_POLICY_FILE, checkMemory, integration, geminiPolicyPath, findLegacy, installAgents, manifest, removeLegacy, setupTool, uninstallAgents, uninstallTool, LEGACY_HEADING } from '../src/setup.ts'
+import { CAPABILITIES, GEMINI_COMMAND_FILE, GEMINI_POLICY_FILE, binCommand, checkMemory, geminiHooks, geminiIntegration, integration, shellCommand, geminiPolicyPath, findLegacy, installAgents, manifest, removeLegacy, setupTool, uninstallAgents, uninstallTool, LEGACY_HEADING } from '../src/setup.ts'
 import { SUBAGENTS_DIR } from '../src/build.ts'
 import { VERSION } from '../src/version.ts'
 
@@ -230,4 +230,98 @@ test('uninstall leaves an edited gemini plan policy in place', async (t) => {
   assert.deepEqual(steps.map((step) => [step.agent, step.state, step.path]), [['gemini', 'skipped', file]])
   assert.match(steps[0]!.detail, /differs/)
   assert.equal(await readFile(file, 'utf8'), '# mine\n')
+})
+
+const BEFORE_TOOL_MATCHER = '^(read_file|read_many_files|grep_search|glob|list_directory|google_web_search|web_fetch|write_file|replace|run_shell_command|invoke_agent|ask_user)$'
+
+function expectedHooks(bin: string) {
+  const hook = (event: string) => [{ type: 'command', name: 'nursery-flow', command: `${bin} gemini-hook ${event}`, timeout: 10000 }]
+  return {
+    hooks: {
+      BeforeAgent: [{ hooks: hook('BeforeAgent') }],
+      BeforeTool: [{ matcher: BEFORE_TOOL_MATCHER, hooks: hook('BeforeTool') }],
+      AfterTool: [{ matcher: '^(invoke_agent|ask_user)$', hooks: hook('AfterTool') }],
+      AfterAgent: [{ hooks: hook('AfterAgent') }],
+    },
+  }
+}
+
+test('shellCommand quotes every part for a POSIX shell or for PowerShell', () => {
+  assert.equal(shellCommand(['/usr/bin/node', "/it's/bin.js"], 'darwin'), `'/usr/bin/node' '/it'\\''s/bin.js'`)
+  assert.equal(shellCommand(['/usr/bin/node', '/a b/bin.js'], 'linux'), `'/usr/bin/node' '/a b/bin.js'`)
+  assert.equal(shellCommand(['C:\\Program Files\\nodejs\\node.exe', "C:\\it's\\bin.js"], 'win32'), `& 'C:\\Program Files\\nodejs\\node.exe' 'C:\\it''s\\bin.js'`)
+})
+
+test('the gemini hooks use the PowerShell call operator on windows', async (t) => {
+  const { home } = await sandbox(t)
+  const ctx = platformContext({ platform: 'win32', home, env: { PATH: '' } })
+  const hooks = await geminiHooks(ctx)
+  assert.deepEqual(Object.keys(hooks), ['BeforeAgent', 'BeforeTool', 'AfterTool', 'AfterAgent'])
+  assert.equal(hooks['BeforeTool']?.[0]?.hooks[0]?.command, `${shellCommand(binCommand(), 'win32')} gemini-hook BeforeTool`)
+  assert.match(hooks['BeforeTool']?.[0]?.hooks[0]?.command ?? '', /^& '[^']+' '[^']+' gemini-hook BeforeTool$/)
+})
+
+test('only the gemini integration carries the flow command and hooks', async () => {
+  const shared = await integration()
+  assert.deepEqual(shared.userSkills?.map((skill) => skill.name), ['nursery'])
+  assert.equal(shared.commands, undefined)
+  assert.equal(shared.gemini, undefined)
+
+  const gemini = await geminiIntegration()
+  assert.equal(gemini.userSkills, undefined)
+  assert.deepEqual(gemini.commands, [{ name: 'nursery', file: GEMINI_COMMAND_FILE }])
+  assert.deepEqual(Object.keys(gemini.gemini?.hooks ?? {}), ['BeforeAgent', 'BeforeTool', 'AfterTool', 'AfterAgent'])
+  assert.equal(gemini.memory, shared.memory)
+  assert.deepEqual(gemini.subagents, shared.subagents)
+})
+
+test('installing gemini writes the flow hooks and the /nursery command into the extension', async (t) => {
+  const { homes, options } = await sandbox(t)
+  const steps = await installAgents(['gemini'], options)
+  assert.deepEqual(steps.filter((step) => step.state === 'failed'), [])
+  const root = path.join(homes.gemini, 'extensions', 'nursery')
+
+  const hooksFile = path.join(root, 'hooks', 'hooks.json')
+  const hooks = JSON.parse(await readFile(hooksFile, 'utf8')) as unknown
+  const bin = shellCommand(binCommand(), process.platform === 'win32' ? 'win32' : 'darwin')
+  assert.deepEqual(hooks, expectedHooks(bin))
+  assert.match(bin, process.platform === 'win32' ? /^& '/ : /^'/)
+  assert.ok(steps.some((step) => step.agent === 'gemini' && step.item === 'hooks' && step.state === 'installed' && step.path === hooksFile))
+
+  const toml = await readFile(path.join(root, 'commands', 'nursery.toml'), 'utf8')
+  assert.equal(toml, agents.commandToGeminiToml(await readFile(GEMINI_COMMAND_FILE, 'utf8')))
+  assert.match(toml, /\[nursery-flow\]/)
+  assert.match(toml, /\{\{args\}\}/)
+  assert.doesNotMatch(toml, /\$ARGUMENTS/)
+  assert.match(await readFile(path.join(root, 'agents', 'researcher.md'), 'utf8'), /kind: local/)
+  assert.match(await readFile(path.join(homes.gemini, 'GEMINI.md'), 'utf8'), /Cero rastro de IA/)
+
+  await uninstallAgents(options)
+  assert.ok(!existsSync(root))
+})
+
+test('opencode and codex keep the nursery command from the skill and get no hooks', async (t) => {
+  const { homes, options } = await sandbox(t)
+  const steps = await installAgents(['opencode', 'codex'], options)
+  assert.deepEqual(steps.filter((step) => step.state === 'failed'), [])
+  assert.ok(!steps.some((step) => step.item === 'hooks'))
+  assert.ok(!existsSync(path.join(homes.codex, 'hooks.json')))
+  assert.ok(!existsSync(path.join(homes.gemini, 'extensions', 'nursery')))
+  for (const file of [path.join(homes.opencode, 'commands', 'nursery.md'), path.join(homes.codex, 'prompts', 'nursery.md')]) {
+    const text = await readFile(file, 'utf8')
+    assert.doesNotMatch(text, /\[nursery-flow\]/, file)
+    assert.ok(text.length > 0, file)
+  }
+})
+
+test('blocked legacy rules keep the gemini memory out but still install the flow hooks', async (t) => {
+  const { homes, options } = await sandbox(t)
+  await mkdir(homes.gemini, { recursive: true })
+  const file = path.join(homes.gemini, 'GEMINI.md')
+  await writeFile(file, LEGACY)
+  const steps = await installAgents(['gemini'], options)
+  assert.ok(steps.some((step) => step.agent === 'gemini' && step.item === 'legacy rules' && step.state === 'skipped'))
+  assert.equal(await readFile(file, 'utf8'), LEGACY)
+  assert.ok(existsSync(path.join(homes.gemini, 'extensions', 'nursery', 'hooks', 'hooks.json')))
+  assert.ok(existsSync(path.join(homes.gemini, 'extensions', 'nursery', 'commands', 'nursery.toml')))
 })
