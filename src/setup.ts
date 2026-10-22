@@ -1,5 +1,5 @@
 import { existsSync } from 'node:fs'
-import { copyFile, readFile, writeFile } from 'node:fs/promises'
+import { copyFile, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { agents } from '@kikedealba/kit'
 import { platformContext, type PlatformContext } from '@kikedealba/kit/platform'
@@ -12,6 +12,8 @@ export const TOOL = 'nursery'
 export const CLAUDE_PLUGIN: agents.ClaudePluginSpec = { marketplace: 'KikeDeAlba/nursery', marketplaceName: 'nursery', plugin: 'nursery' }
 
 export const CAPABILITIES = ['agents.subagents', 'agents.rules']
+
+export const GEMINI_POLICY_FILE = path.join(path.dirname(RULES_FILE), 'gemini-plan.toml')
 
 export const INSTALL_HINT = 'npm install -g @kikedealba/nursery && nursery setup'
 
@@ -81,6 +83,28 @@ export function memoryPath(agent: MemoryAgent, options: agents.InstallOptions = 
   return path.join(base, agents.MEMORY_FILES[agent])
 }
 
+export function geminiPolicyPath(options: agents.InstallOptions = {}): string {
+  return path.join(agents.agentHomes(options.ctx ?? platformContext(), options.homes).gemini, 'policies', 'nursery.toml')
+}
+
+async function installGeminiPolicy(options: agents.InstallOptions): Promise<agents.Step> {
+  const file = geminiPolicyPath(options)
+  const policy = await readFile(GEMINI_POLICY_FILE, 'utf8')
+  const current = existsSync(file) ? await readFile(file, 'utf8') : null
+  if (current === policy) return { agent: 'gemini', item: 'plan policy', state: 'present', detail: `${file} is up to date`, path: file }
+  await mkdir(path.dirname(file), { recursive: true })
+  await writeFile(file, policy)
+  const detail = current === null ? `wrote ${file}` : `updated ${file}`
+  return { agent: 'gemini', item: 'plan policy', state: 'installed', detail, path: file }
+}
+
+async function uninstallGeminiPolicy(options: agents.InstallOptions): Promise<agents.Step | null> {
+  const file = geminiPolicyPath(options)
+  if (!existsSync(file)) return null
+  await rm(file, { force: true })
+  return { agent: 'gemini', item: 'plan policy', state: 'removed', detail: `removed ${file}`, path: file }
+}
+
 export function findLegacy(text: string): { start: number; end: number } | null {
   const block = /<!-- kit:[a-z0-9-]+:begin -->[\s\S]*?<!-- kit:[a-z0-9-]+:end -->/g
   const masked = text.replace(block, (match) => ' '.repeat(match.length))
@@ -143,6 +167,7 @@ export async function installAgents(selection: AgentSelection, options: SetupOpt
     const { memory: _memory, ...withoutMemory } = full
     if (closed.length > 0) steps.push(...(await agents.installIntegration(withoutMemory, { ...options, agents: closed })))
   }
+  if (targets.includes('gemini')) steps.push(await installGeminiPolicy(options))
   return steps
 }
 
@@ -151,6 +176,8 @@ export async function uninstallAgents(options: agents.InstallOptions = {}): Prom
   steps.push(...(await agents.uninstallClaudePlugin(CLAUDE_PLUGIN, options)))
   steps.push(...(await agents.uninstallIntegration(memoryIntegration(), { ...options, agents: ['claude'] })))
   steps.push(...(await agents.uninstallIntegration(await integration(), { ...options, agents: ['opencode', 'codex', 'gemini'] })))
+  const policy = await uninstallGeminiPolicy(options)
+  if (policy) steps.push(policy)
   return steps
 }
 

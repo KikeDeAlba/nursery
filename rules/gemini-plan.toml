@@ -1,0 +1,16 @@
+[[rule]]
+name = "nursery read-only subagents in Plan mode"
+toolName = "invoke_agent"
+argsPattern = "\"agent_name\":\\s*\"(researcher|analyst|architect|security|code-reviewer|sre)\""
+decision = "allow"
+priority = 100
+modes = ["plan"]
+
+[[rule]]
+name = "nursery read-only git and npm inside Plan-mode research"
+toolName = "run_shell_command"
+commandPrefix = ["git fetch", "git ls-tree", "git show", "git log", "git status", "git diff", "npm view"]
+subagent = "researcher"
+decision = "allow"
+priority = 100
+modes = ["plan"]
