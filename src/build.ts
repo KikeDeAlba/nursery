@@ -47,7 +47,7 @@ export async function buildAgents(sourceDir: string = SOURCE_DIR, conventionsDir
   return built
 }
 
-export function claudeAgent(content: string): string {
+function claudeAgent(content: string): string {
   return agents.renderForAgent(content, 'claude')
 }
 

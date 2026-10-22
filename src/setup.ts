@@ -71,7 +71,7 @@ export async function integration(): Promise<agents.AgentIntegration> {
     tool: TOOL,
     version: VERSION,
     description: 'Specialist subagents and shared working rules',
-    subagents: (await agentNames()).map((name) => ({ name, file: path.join(SUBAGENTS_DIR, `${name}.md`) })),
+    subagents: (await agentNames(SUBAGENTS_DIR)).map((name) => ({ name, file: path.join(SUBAGENTS_DIR, `${name}.md`) })),
     userSkills: [{ name: 'nursery', dir: path.join(PACKAGE_ROOT, 'skills', 'nursery') }],
     memory: RULES_FILE,
   }
