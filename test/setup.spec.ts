@@ -250,6 +250,8 @@ test('shellCommand quotes every part for a POSIX shell or for PowerShell', () =>
   assert.equal(shellCommand(['/usr/bin/node', "/it's/bin.js"], 'darwin'), `'/usr/bin/node' '/it'\\''s/bin.js'`)
   assert.equal(shellCommand(['/usr/bin/node', '/a b/bin.js'], 'linux'), `'/usr/bin/node' '/a b/bin.js'`)
   assert.equal(shellCommand(['C:\\Program Files\\nodejs\\node.exe', "C:\\it's\\bin.js"], 'win32'), `& 'C:\\Program Files\\nodejs\\node.exe' 'C:\\it''s\\bin.js'`)
+  assert.equal(shellCommand(['C:\\a‘b’c‚d‛e\\node.exe'], 'win32'), `& 'C:\\a‘‘b’’c‚‚d‛‛e\\node.exe'`)
+  assert.equal(shellCommand(["C:\\it’s'\\bin.js"], 'win32'), `& 'C:\\it’’s''\\bin.js'`)
 })
 
 test('the gemini hooks use the PowerShell call operator on windows', async (t) => {

@@ -90,7 +90,7 @@ export const GEMINI_HOOK_MATCHERS: Partial<Record<HookEventName, string>> = {
 }
 
 export function shellCommand(parts: readonly string[], platform: PlatformContext['platform']): string {
-  if (platform === 'win32') return `& ${parts.map((part) => `'${part.replace(/'/g, "''")}'`).join(' ')}`
+  if (platform === 'win32') return `& ${parts.map((part) => `'${part.replace(/['‘’‚‛]/g, (m) => m + m)}'`).join(' ')}`
   return parts.map((part) => `'${part.replace(/'/g, `'\\''`)}'`).join(' ')
 }
 
