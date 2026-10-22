@@ -4,6 +4,7 @@ import { describe, test } from 'node:test'
 import {
   CHANGE_AGENTS,
   CONTEXT,
+  FREE_TOOLS,
   MARKER,
   READ_AGENTS,
   READ_LIMIT,
@@ -15,6 +16,7 @@ import {
   findProposal,
   isAcceptance,
   isFlowStart,
+  isMcpRead,
   normalize,
   planPath,
   slugify,
@@ -379,12 +381,49 @@ describe('BeforeTool before acceptance', () => {
       }
     })
 
-    test(`${phase}: the shell is denied only without active agents`, () => {
-      denied(run(state({ phase }), beforeTool('run_shell_command', { command: 'ls' })).result, 'Antes de aceptar no se usa el shell. Lee con read_file, grep_search o glob, o delega al researcher.')
-      const s = state({ phase, activeAgents: 1 })
-      const out = run(s, beforeTool('run_shell_command', { command: 'ls' }))
-      assert.deepEqual(out.result, {})
-      assert.equal(out.state, s)
+    test(`${phase}: the shell is denied even with active agents`, () => {
+      for (const activeAgents of [0, 1, 3]) {
+        const s = state({ phase, activeAgents })
+        const out = run(s, beforeTool('run_shell_command', { command: 'ls' }))
+        denied(out.result, 'Antes de aceptar no se usa el shell. Lee con read_file, grep_search o glob, o delega al researcher.')
+        assert.equal(out.state, s)
+      }
+    })
+
+    test(`${phase}: mcp reads are allowed and counted like the other reads`, () => {
+      for (const tool of ['mcp_atlassian_getJiraIssue', 'mcp_jira_issue_comments', 'mcp_atl_sites', 'mcp_db_count']) {
+        const out = run(state({ phase, reads: { used: 1, limit: 3 } }), beforeTool(tool))
+        assert.deepEqual(out.result, {}, tool)
+        assert.deepEqual(out.state?.reads, { used: 2, limit: 3 }, tool)
+      }
+      denied(run(state({ phase, reads: { used: 3, limit: 3 } }), beforeTool('mcp_atlassian_getJiraIssue')).result, phase === 'proposed' ? REASON.readsProposed : REASON.readsExplore)
+      const busy = state({ phase, activeAgents: 1, reads: { used: 3, limit: 3 } })
+      assert.deepEqual(run(busy, beforeTool('mcp_atlassian_searchJiraIssuesUsingJql')), { state: busy, result: {}, log: [] })
+    })
+
+    test(`${phase}: mcp writes are denied whatever the agents`, () => {
+      for (const tool of ['mcp_atlassian_createJiraIssue', 'mcp_jira_update_issue', 'mcp_jira_delete_issue', 'mcp_jira_transition_issue', 'mcp_atl_api_call', 'mcp_x_create_findings', 'mcp_x_delete_showcase']) {
+        for (const activeAgents of [0, 2]) {
+          const s = state({ phase, activeAgents })
+          const out = run(s, beforeTool(tool))
+          denied(out.result, REASON.toolBefore)
+          assert.equal(out.state, s)
+        }
+      }
+    })
+
+    test(`${phase}: unknown tools and plan mode are denied`, () => {
+      for (const tool of ['save_memory', 'enter_plan_mode', 'exit_plan_mode', 'brand_new_tool', 'getIssue']) {
+        denied(run(state({ phase }), beforeTool(tool)).result, `Antes de aceptar el plan solo se lee, se pregunta y se delega a agentes de lectura. Presenta la propuesta ${Q}.`)
+      }
+    })
+
+    test(`${phase}: search_file_content counts as a read and the free tools pass untouched`, () => {
+      assert.equal(run(state({ phase }), beforeTool('search_file_content')).state?.reads.used, 1)
+      for (const tool of FREE_TOOLS) {
+        const s = state({ phase, reads: { used: 3, limit: 3 } })
+        assert.deepEqual(run(s, beforeTool(tool)), { state: s, result: {}, log: [] }, tool)
+      }
     })
 
     test(`${phase}: an invalid proposal is denied`, () => {
@@ -439,9 +478,9 @@ describe('BeforeTool before acceptance', () => {
     denied(run(state({ ...full, researched: true }), beforeTool('read_file')).result, `Ya tienes la entrega del researcher. Pregunta tus dudas y presenta la propuesta ${Q}.`)
   })
 
-  test('tools outside the lists are allowed untouched', () => {
-    const s = state()
-    assert.deepEqual(run(s, beforeTool('save_memory')), { state: s, result: {}, log: [] })
+  test('isMcpRead looks at the verb that starts the last segment', () => {
+    for (const tool of ['mcp_a_getIssue', 'mcp_a_get', 'mcp_a__search', 'mcp_a_b_listSites', 'mcp_a_Fetch2', 'mcp_a_view-page']) assert.equal(isMcpRead(tool), true, tool)
+    for (const tool of ['getIssue', 'mcp_gitlab_list_merge_requests', 'mcp_a_createIssue', 'mcp_a_findings', 'mcp_a_showcase', 'mcp_a_get_and_delete', 'mcp_', 'mcp_a_']) assert.equal(isMcpRead(tool), false, tool)
   })
 })
 

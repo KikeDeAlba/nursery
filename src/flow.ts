@@ -16,6 +16,8 @@ import type {
 
 export const MARKER = '[nursery-flow]'
 export const READ_TOOLS: readonly string[] = ['read_file', 'read_many_files', 'grep_search', 'glob', 'list_directory', 'google_web_search', 'web_fetch']
+export const MCP_READ_VERBS: readonly string[] = ['get', 'search', 'list', 'read', 'describe', 'view', 'query', 'fetch', 'find', 'show', 'comments', 'sites', 'count']
+export const FREE_TOOLS: readonly string[] = ['update_topic', 'write_todos', 'activate_skill']
 export const READ_AGENTS: readonly string[] = ['researcher', 'analyst', 'architect', 'security', 'code-reviewer', 'sre']
 export const WORK_AGENTS: readonly string[] = ['developer', 'devops', 'qa-automation', 'documenter']
 export const CHANGE_AGENTS: readonly string[] = ['developer', 'devops', 'documenter']
@@ -25,6 +27,7 @@ export const MAX_VALIDATION_RETRIES = 2
 export const MIN_PROPOSAL_CHARS = 80
 
 const WRITE_TOOLS: readonly string[] = ['write_file', 'replace']
+const SEARCH_TOOL = 'search_file_content'
 const ACCEPTANCES = new Set([
   'acepto', 'aceptar', 'aceptado', 'aceptada', 'acepta', 'si', 'si acepto', 'dale', 'adelante', 'si adelante',
   'ok', 'okay', 'va', 'de acuerdo', 'aprobado', 'apruebo', 'procede', 'hazlo',
@@ -52,6 +55,7 @@ export const REASON = {
   writeBefore: `Aún no hay plan aceptado: no escribas archivos. Presenta la propuesta ${Q}.`,
   shell: 'Antes de aceptar no se usa el shell. Lee con read_file, grep_search o glob, o delega al researcher.',
   workAgent: (agent: string) => `${agent} trabaja solo con el plan aceptado. Presenta la propuesta ${Q}.`,
+  toolBefore: `Antes de aceptar el plan solo se lee, se pregunta y se delega a agentes de lectura. Presenta la propuesta ${Q}.`,
   otherAgent: 'Antes de aceptar solo puedes invocar a researcher, analyst, architect, security, code-reviewer o sre.',
   readsExplore: `Llegaste al tope de 8 lecturas. Delega lo que falte al researcher, o pregunta tus dudas y presenta la propuesta ${Q}.`,
   readsResearched: `Ya tienes la entrega del researcher. Pregunta tus dudas y presenta la propuesta ${Q}.`,
@@ -73,6 +77,17 @@ function missing(qa: boolean, review: boolean): string {
 
 function truncate(text: string, max: number): string {
   return text.length > max ? `${text.slice(0, max - 1)}…` : text
+}
+
+export function isMcpRead(tool: string): boolean {
+  if (!tool.startsWith('mcp_')) return false
+  const last = tool.split('_').filter(Boolean).at(-1) ?? ''
+  const lower = last.toLowerCase()
+  return MCP_READ_VERBS.some((verb) => lower.startsWith(verb) && !/[a-z]/.test(last.charAt(verb.length)))
+}
+
+function isReadTool(tool: string): boolean {
+  return READ_TOOLS.includes(tool) || tool === SEARCH_TOOL || isMcpRead(tool)
 }
 
 export function isFlowStart(prompt: string): boolean {
@@ -301,13 +316,14 @@ function beforeToolExplore(state: FlowState, event: BeforeToolEvent, now: Date):
   }
   if (tool === 'ask_user') return proposal(state, event, now)
   if (WRITE_TOOLS.includes(tool)) return out(state, deny(REASON.writeBefore))
-  if (tool === 'run_shell_command') return agents === 0 ? out(state, deny(REASON.shell)) : out(state)
-  if (READ_TOOLS.includes(tool)) {
+  if (tool === 'run_shell_command') return out(state, deny(REASON.shell))
+  if (isReadTool(tool)) {
     if (agents > 0) return out(state)
     if (state.reads.used < state.reads.limit) return out(patch(state, { reads: { ...state.reads, used: state.reads.used + 1 } }, now))
     return out(state, deny(readsReason(state)))
   }
-  return out(state)
+  if (FREE_TOOLS.includes(tool)) return out(state)
+  return out(state, deny(REASON.toolBefore))
 }
 
 function beforeToolAccepted(state: FlowState, event: BeforeToolEvent, now: Date): StepOutput {

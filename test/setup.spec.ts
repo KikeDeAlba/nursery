@@ -232,7 +232,7 @@ test('uninstall leaves an edited gemini plan policy in place', async (t) => {
   assert.equal(await readFile(file, 'utf8'), '# mine\n')
 })
 
-const BEFORE_TOOL_MATCHER = '^(read_file|read_many_files|grep_search|glob|list_directory|google_web_search|web_fetch|write_file|replace|run_shell_command|invoke_agent|ask_user)$'
+const BEFORE_TOOL_MATCHER = '.*'
 
 function expectedHooks(bin: string) {
   const hook = (event: string) => [{ type: 'command', name: 'nursery-flow', command: `${bin} gemini-hook ${event}`, timeout: 10000 }]

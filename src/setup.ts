@@ -85,7 +85,7 @@ export const GEMINI_HOOK_NAME = 'nursery-flow'
 export const GEMINI_HOOK_TIMEOUT_MS = 10000
 
 export const GEMINI_HOOK_MATCHERS: Partial<Record<HookEventName, string>> = {
-  BeforeTool: '^(read_file|read_many_files|grep_search|glob|list_directory|google_web_search|web_fetch|write_file|replace|run_shell_command|invoke_agent|ask_user)$',
+  BeforeTool: '.*',
   AfterTool: '^(invoke_agent|ask_user)$',
 }
 
