@@ -152,7 +152,9 @@ servidor (`mcp_context.tool_name`) lleva un verbo de lectura (`get`, `search`,
 `list`, `read`, `describe`, `view`, `fetch`, `find`, `show`, `comments`, `sites`,
 `count`, `check` o `inspect`) y ninguno que pueda escribir o ejecutar (`create`,
 `update`, `delete`, `call`, `merge`, `push`, `query`, `exec`, `save`…); gasta
-lecturas del tope como las demás. Si el estado del flujo no se puede leer, solo
+lecturas del tope como las demás. La clasificación es por verbos: un nombre
+con un verbo de lectura y uno de escritura que no esté en la lista pasaría
+como lectura. Si el estado del flujo no se puede leer, solo
 se permiten lecturas, preguntas y agentes de lectura. También se
 bloquea leer más allá del tope y presentar una propuesta con otro formato. Al
 negar, el motivo dice qué hacer en su lugar.
@@ -176,6 +178,9 @@ desinstalar nada.
 
 No funciona en modo headless (`gemini -p`): ahí `ask_user` se niega, así que no
 hay forma de aceptar la propuesta.
+
+El hook corre antes de cada herramienta en todas las sesiones de Gemini, también
+fuera de `/nursery`; sin flujo activo responde en unos 40 ms y deja pasar todo.
 
 ## Delegación automática
 

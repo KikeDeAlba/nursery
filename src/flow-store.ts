@@ -51,7 +51,7 @@ export async function loadState(file: string, plansDir?: string): Promise<FlowSt
   if (state.sessionId !== path.basename(file, '.json')) return null
   if (typeof state.phase !== 'string' || !PHASES.includes(state.phase)) return null
   if (typeof state.planPath !== 'string') return null
-  if (plansDir !== undefined && !isInside(plansDir, state.planPath)) return null
+  if (plansDir !== undefined && state.phase !== 'done' && !isInside(plansDir, state.planPath)) return null
   return state as FlowState
 }
 
@@ -87,7 +87,12 @@ async function acquire(lock: string, token: string): Promise<boolean> {
     if (errorCode(error) === 'EEXIST') return false
     throw error
   }
-  await writeFile(path.join(lock, LOCK_OWNER), token, { mode: FILE_MODE })
+  try {
+    await writeFile(path.join(lock, LOCK_OWNER), token, { mode: FILE_MODE })
+  } catch (error) {
+    await rm(lock, { recursive: true, force: true })
+    throw error
+  }
   return true
 }
 
