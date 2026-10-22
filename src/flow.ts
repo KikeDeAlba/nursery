@@ -25,6 +25,8 @@ export const READ_LIMIT = 8
 export const READ_LIMIT_AFTER = 3
 export const MAX_VALIDATION_RETRIES = 2
 export const MIN_PROPOSAL_CHARS = 80
+export const MAX_DETAIL_CHARS = 300
+export const MAX_CORRECTION_CHARS = 1000
 
 const WRITE_TOOLS: readonly string[] = ['write_file', 'replace']
 const SEARCH_TOOL = 'search_file_content'
@@ -59,7 +61,7 @@ export const REASON = {
   readsCorrection: `Ya usaste las 3 lecturas de la corrección. Ajusta la propuesta y vuelve a preguntar ${Q}.`,
   readsProposed: `La propuesta está en revisión. Espera la respuesta del usuario o vuelve a proponer ${Q}.`,
   format: 'Propuesta con formato inválido. Usa ask_user con una sola pregunta header "Propuesta", type "choice", sin multiSelect, la propuesta completa en question (80 caracteres o más) y las opciones "Aceptar" y "Corregir".',
-  writeAccepted: 'Plan aceptado: el código lo escriben developer o devops con invoke_agent. Tú solo puedes escribir archivos .md.',
+  writeAccepted: 'Plan aceptado: el código lo escriben developer o devops con invoke_agent. Tú solo puedes escribir archivos .md. Si necesitas salir del flujo, NURSERY_FLOW=off.',
   unreadable: 'El estado del flujo de nursery no se pudo leer. Vuelve a lanzar /nursery o desactívalo con NURSERY_FLOW=off.',
   validate: (qa: boolean, review: boolean) => `Falta validar: lanza ${missing(qa, review)} con invoke_agent sobre los cambios y corrige lo que reporten antes de cerrar.`,
 }
@@ -183,13 +185,18 @@ function errorText(error: unknown): string {
   return String(error)
 }
 
-function agentResult(resp: ToolResponse): { outcome: AgentOutcome; detail: string } {
+function rawAgentResult(resp: ToolResponse): { outcome: AgentOutcome; detail: string } {
   if (resp.error !== undefined && resp.error !== null && resp.error !== false) return { outcome: 'failed', detail: errorText(resp.error) }
   const text = responseText(resp)
   if (!/^Subagent '[^']*' finished\./.test(text)) return { outcome: 'failed', detail: text.trim().split('\n')[0] ?? '' }
   const reason = /Termination Reason:\s*(\S+)/.exec(text)?.[1]
   if (reason === undefined || reason === 'GOAL') return { outcome: 'goal', detail: '' }
   return { outcome: 'partial', detail: reason }
+}
+
+function agentResult(resp: ToolResponse): { outcome: AgentOutcome; detail: string } {
+  const { outcome, detail } = rawAgentResult(resp)
+  return { outcome, detail: truncate(detail, MAX_DETAIL_CHARS) }
 }
 
 export function agentOutcome(resp: ToolResponse): AgentOutcome {
@@ -224,7 +231,7 @@ function out(state: FlowState | null, result: HookResult = NONE, log: PlanLogEnt
   return { state, result, log }
 }
 
-const ACCEPT_CHANGES: Partial<FlowState> = { phase: 'accepted', activeAgents: 0, changed: false, validation: { qa: false, review: false } }
+const ACCEPT_CHANGES: Partial<FlowState> = { phase: 'accepted', activeAgents: 0 }
 
 function correction(state: FlowState): Partial<FlowState> {
   return { phase: 'explore', reads: { used: 0, limit: READ_LIMIT_AFTER }, corrections: state.corrections + 1 }
@@ -276,7 +283,7 @@ function beforeAgent(state: FlowState, event: BeforeAgentEvent, now: Date): Step
       ])
     }
     return out(patch(state, { ...correction(state), activeAgents: 0 }, now), context('BeforeAgent', CONTEXT.correctedText(p)), [
-      { kind: 'correction', file: p, at, via: 'text', text: event.prompt.trim().slice(0, 2000) },
+      { kind: 'correction', file: p, at, via: 'text', text: event.prompt.trim().slice(0, MAX_CORRECTION_CHARS) },
       { kind: 'phase', file: p, phase: 'explore' },
     ])
   }
@@ -324,7 +331,12 @@ function beforeToolExplore(state: FlowState, event: BeforeToolEvent, now: Date):
   return out(state, deny(REASON.toolBefore))
 }
 
-function beforeToolAccepted(state: FlowState, event: BeforeToolEvent, now: Date): StepOutput {
+function isPlanFile(file: string, event: BeforeToolEvent, env: FlowEnv): boolean {
+  const relative = path.relative(path.resolve(env.plansDir), path.resolve(event.cwd, file))
+  return relative.length > 0 && !relative.startsWith('..') && !path.isAbsolute(relative)
+}
+
+function beforeToolAccepted(state: FlowState, event: BeforeToolEvent, now: Date, env: FlowEnv): StepOutput {
   const tool = event.tool_name
   if (tool === 'invoke_agent') {
     const agent = asString(event.tool_input['agent_name'])
@@ -336,8 +348,9 @@ function beforeToolAccepted(state: FlowState, event: BeforeToolEvent, now: Date)
   if (WRITE_TOOLS.includes(tool) && state.activeAgents === 0) {
     const file = asString(event.tool_input['file_path'])
     if (!file.toLowerCase().endsWith('.md')) return out(state, deny(REASON.writeAccepted))
-    return out(state)
+    return isPlanFile(file, event, env) ? out(state) : out(patch(state, { changed: true }, now))
   }
+  if (tool === 'run_shell_command' && state.activeAgents === 0) return out(patch(state, { changed: true }, now))
   if (tool === 'ask_user') return proposal(state, event, now)
   return out(state)
 }
@@ -410,7 +423,7 @@ function afterAsk(state: FlowState, event: AfterToolEvent, now: Date): StepOutpu
     return out(next, context('AfterTool', CONTEXT.correctAsk()), [{ kind: 'correction', file: p, at, via: 'dialog', text: '' }, phase])
   }
   return out(next, context('AfterTool', CONTEXT.corrected(answer.text)), [
-    { kind: 'correction', file: p, at, via: 'dialog', text: answer.text.slice(0, 2000) },
+    { kind: 'correction', file: p, at, via: 'dialog', text: answer.text.slice(0, MAX_CORRECTION_CHARS) },
     phase,
   ])
 }
@@ -440,8 +453,9 @@ function afterAgent(state: FlowState, _event: AfterAgentEvent, now: Date): StepO
     ])
   }
   if (!state.retries.gaveUp) {
-    return out(patch(base, { retries: { ...state.retries, gaveUp: true } }, now), NONE, [
+    return out(patch(base, { phase: 'done', retries: { ...state.retries, gaveUp: true } }, now), NONE, [
       { kind: 'validation', file, at, qa, review, result: 'gave-up', attempt },
+      { kind: 'phase', file, phase: 'done' },
     ])
   }
   return out(base)
@@ -467,7 +481,7 @@ export function step(state: FlowState | null, event: HookEvent, now: Date, env: 
       case 'BeforeAgent':
         return beforeAgent(state, event, now)
       case 'BeforeTool':
-        return state.phase === 'accepted' ? beforeToolAccepted(state, event, now) : beforeToolExplore(state, event, now)
+        return state.phase === 'accepted' ? beforeToolAccepted(state, event, now, env) : beforeToolExplore(state, event, now)
       case 'AfterTool':
         return afterTool(state, event, now)
       case 'AfterAgent':

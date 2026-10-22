@@ -246,7 +246,7 @@ describe('general', () => {
   test('an unchanged step returns the same state reference', () => {
     const s = state({ phase: 'accepted' })
     assert.equal(run(s, beforeAgent('sigue')).state, s)
-    assert.equal(run(s, beforeTool('run_shell_command')).state, s)
+    assert.equal(run(s, beforeTool('read_file')).state, s)
     assert.equal(run(state(), beforeTool('write_file')).state?.reads.used, 0)
   })
 
@@ -358,10 +358,12 @@ describe('BeforeAgent', () => {
     assert.deepEqual(out.log, [{ kind: 'correction', file: P, at: AT, via: 'text', text: 'Cambia la ruta' }, { kind: 'phase', file: P, phase: 'explore' }])
   })
 
-  test('a long text correction is logged up to 2000 characters', () => {
+  test('a long text correction is logged up to 1000 characters', () => {
     const out = run(state({ phase: 'proposed' }), beforeAgent('x'.repeat(3000)))
     const entry = out.log[0]
-    assert.equal(entry?.kind === 'correction' && entry.text.length, 2000)
+    assert.equal(entry?.kind === 'correction' && entry.text.length, 1000)
+    const dialog = run(state({ phase: 'proposed' }), afterTool('ask_user', proposalInput(), answered(0, 'z'.repeat(3000)))).log[0]
+    assert.equal(dialog?.kind === 'correction' && dialog.text.length, 1000)
   })
 
   test('in accepted reports the validation', () => {
@@ -578,6 +580,12 @@ describe('AfterTool of invoke_agent', () => {
     assert.equal(entry?.kind === 'agent' && entry.outcome, 'failed')
   })
 
+  test('the agent detail is cut to 300 characters', () => {
+    const out = run(state({ activeAgents: 1 }), afterTool('invoke_agent', agentCall('architect'), { error: { message: 'e'.repeat(5000) } }))
+    const entry = out.log[0]
+    assert.equal(entry?.kind === 'agent' && entry.detail.length, 300)
+  })
+
   test('validation is tracked in accepted', () => {
     let s = state({ phase: 'accepted', activeAgents: 2, changed: true })
     const qa = run(s, afterTool('invoke_agent', agentCall('qa-automation'), finished('qa-automation')))
@@ -682,20 +690,48 @@ describe('BeforeTool in accepted', () => {
     assert.deepEqual(qa.state?.validation, { qa: true, review: false })
   })
 
-  test('the main thread only writes .md files', () => {
+  test('the main thread only writes .md files and those outside the plans need validation', () => {
     const s = state({ phase: 'accepted' })
     for (const tool of ['write_file', 'replace']) {
-      denied(run(s, beforeTool(tool, { file_path: 'src/a.ts' })).result, 'Plan aceptado: el código lo escriben developer o devops con invoke_agent. Tú solo puedes escribir archivos .md.')
+      denied(run(s, beforeTool(tool, { file_path: 'src/a.ts' })).result, 'Plan aceptado: el código lo escriben developer o devops con invoke_agent. Tú solo puedes escribir archivos .md. Si necesitas salir del flujo, NURSERY_FLOW=off.')
       denied(run(s, beforeTool(tool, {})).result, REASON.writeAccepted)
-      assert.deepEqual(run(s, beforeTool(tool, { file_path: 'docs/PLAN.MD' })), { state: s, result: {}, log: [] })
+      const docs = run(s, beforeTool(tool, { file_path: 'docs/PLAN.MD' }))
+      assert.deepEqual(docs.result, {})
+      assert.equal(docs.state?.changed, true)
+      assert.deepEqual(docs.state?.validation, { qa: false, review: false })
+      for (const file of [P, '/plans/demo/notes.md', '../plans/demo/x.md']) {
+        const event = { ...beforeTool(tool, { file_path: file }), cwd: '/repo' }
+        assert.deepEqual(run(s, event), { state: s, result: {}, log: [] }, file)
+      }
+      assert.equal(run(s, beforeTool(tool, { file_path: '/plans-evil/x.md' })).state?.changed, true)
     }
     const busy = state({ phase: 'accepted', activeAgents: 1 })
-    assert.deepEqual(run(busy, beforeTool('write_file', { file_path: 'src/a.ts' })).result, {})
+    assert.deepEqual(run(busy, beforeTool('write_file', { file_path: 'src/a.ts' })), { state: busy, result: {}, log: [] })
   })
 
-  test('the shell and reads are free', () => {
+  test('the orchestrator shell is free but needs validation, reads stay free', () => {
     const s = state({ phase: 'accepted', reads: { used: 3, limit: 3 } })
-    for (const tool of ['run_shell_command', 'read_file']) assert.deepEqual(run(s, beforeTool(tool)), { state: s, result: {}, log: [] })
+    const shell = run(s, beforeTool('run_shell_command', { command: 'npm test' }))
+    assert.deepEqual(shell.result, {})
+    assert.equal(shell.state?.changed, true)
+    assert.ok(shell.state)
+    const validate = run(shell.state, afterAgent())
+    assert.equal(validate.result && 'decision' in validate.result && validate.result.decision, 'deny')
+    const busy = state({ phase: 'accepted', activeAgents: 1 })
+    assert.equal(run(busy, beforeTool('run_shell_command')).state, busy)
+    for (const tool of ['read_file', 'mcp_jira_createIssue', 'save_memory']) assert.deepEqual(run(s, beforeTool(tool)), { state: s, result: {}, log: [] }, tool)
+  })
+
+  test('a new proposal in accepted keeps changed and the validation through the new acceptance', () => {
+    const s = state({ phase: 'accepted', proposals: 1, changed: true, validation: { qa: true, review: false } })
+    const proposed = run(s, beforeTool('ask_user', proposalInput())).state
+    assert.ok(proposed)
+    assert.equal(proposed.phase, 'proposed')
+    for (const accept of [run(proposed, beforeAgent('acepto')), run(proposed, afterTool('ask_user', proposalInput(), answered(0, 'Aceptar')))]) {
+      assert.equal(accept.state?.phase, 'accepted')
+      assert.equal(accept.state?.changed, true)
+      assert.deepEqual(accept.state?.validation, { qa: true, review: false })
+    }
   })
 
   test('a new proposal moves back to proposed and an invalid one is denied', () => {
@@ -744,8 +780,11 @@ describe('AfterAgent', () => {
     const third = run(second.state, afterAgent())
     assert.deepEqual(third.result, {})
     assert.deepEqual(third.state?.retries, { validation: 2, gaveUp: true })
-    assert.equal(third.state?.phase, 'accepted')
-    assert.deepEqual(third.log, [{ kind: 'validation', file: P, at: AT, qa: true, review: false, result: 'gave-up', attempt: 2 }])
+    assert.equal(third.state?.phase, 'done')
+    assert.deepEqual(third.log, [
+      { kind: 'validation', file: P, at: AT, qa: true, review: false, result: 'gave-up', attempt: 2 },
+      { kind: 'phase', file: P, phase: 'done' },
+    ])
     assert.ok(third.state)
     const fourth = run(third.state, afterAgent())
     assert.deepEqual(fourth, { state: third.state, result: {}, log: [] })
