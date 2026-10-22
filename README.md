@@ -138,18 +138,36 @@ nada si la sesión no empezó el flujo.
 |---|---|
 | Explorar | Gemini invoca al `researcher` si el pedido no es trivial y pregunta solo las dudas que cambian el plan. Tiene 8 lecturas propias; tras la entrega del researcher le quedan 3 como máximo |
 | Propuesta | Gemini la presenta con `ask_user`: una pregunta con header «Propuesta», la propuesta completa y las opciones «Aceptar» y «Corregir» |
+| Aceptación | El usuario acepta con «Aceptar» en el diálogo o escribiendo «acepto» (también «acepto el plan», «aceptado», «apruebo» o «aprobado»). «Sí», «ok» o «dale» no aceptan: cuentan como corrección. Si cierra el diálogo sin responder, vuelve a explorar y Gemini espera |
 | Corrección | Si el usuario corrige, con el diálogo o con un mensaje, vuelve a explorar con 3 lecturas y propone de nuevo, las veces que haga falta |
 | Ejecución | Ya aceptada, cada paso va a su agente con `invoke_agent`, en paralelo los independientes; Gemini solo escribe archivos `.md` |
-| Validación | Antes de cerrar tienen que pasar `qa-automation` y `code-reviewer`; si faltan, el hook le pide lanzarlos, hasta 2 reintentos |
+| Validación | Antes de cerrar tienen que pasar `qa-automation` y `code-reviewer`; si faltan, el hook le pide lanzarlos, hasta 2 reintentos. Si siguen faltando, el plan se cierra y la bitácora dice «sin validar tras 2 reintentos» |
 
-Antes de aceptar, el hook bloquea escribir archivos (`write_file`, `replace`),
-usar el shell en el hilo principal, invocar a `developer`, `devops`,
-`qa-automation` o `documenter`, leer más allá del tope y presentar una propuesta
-con otro formato. Al negar, el motivo dice qué hacer en su lugar.
+Antes de aceptar, todo lo que no sea leer, preguntar o delegar a agentes de
+lectura se bloquea: escribir archivos, el shell (también mientras corre un
+subagente), invocar a `developer`, `devops`, `qa-automation` o `documenter`,
+entrar o salir del modo plan, cualquier herramienta desconocida y las de MCP que
+no sean de lectura. Una herramienta MCP cuenta como lectura si el último
+segmento de su nombre empieza con un verbo de lectura (`get`, `search`, `list`,
+`read`, `describe`, `view`, `query`, `fetch`, `find`, `show`, `comments`,
+`sites` o `count`), y gasta lecturas del tope como las demás. También se
+bloquea leer más allá del tope y presentar una propuesta con otro formato. Al
+negar, el motivo dice qué hacer en su lugar.
+
+Ya aceptado el plan, el shell del hilo principal queda libre, pero usarlo, igual
+que escribir un `.md` fuera del directorio de planes, exige la validación de
+`qa-automation` y `code-reviewer` antes de cerrar.
+
+Si el archivo de estado de la sesión no se puede leer, el hook niega escribir,
+el shell, los agentes de trabajo y las herramientas MCP de escritura hasta que
+se vuelva a lanzar `/nursery` o se desactive con `NURSERY_FLOW=off`. Si el hook
+mismo falla o pasa de su timeout, Gemini deja pasar la herramienta: es una
+limitación de Gemini CLI, no algo que el hook pueda evitar.
 
 Cada `/nursery` deja una bitácora del plan en
 `~/.gemini/nursery/plans/<proyecto>/<fecha>-<slug>.md`, con el pedido, cada
-propuesta, las correcciones, los agentes y la validación. `NURSERY_PLANS_DIR`
+propuesta, las correcciones, los agentes y la validación. Solo tu usuario puede
+leer el estado y la bitácora (archivos `0600`, directorios `0700`). `NURSERY_PLANS_DIR`
 cambia el directorio base, y `NURSERY_FLOW=off` desactiva el flujo sin
 desinstalar nada.
 
