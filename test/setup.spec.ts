@@ -9,7 +9,7 @@ import { test } from 'node:test'
 import { agents } from '@kikedealba/kit'
 import { assertConformance } from '@kikedealba/kit/conformance'
 import { platformContext } from '@kikedealba/kit/platform'
-import { CAPABILITIES, checkMemory, findLegacy, installAgents, manifest, removeLegacy, setupTool, uninstallAgents, uninstallTool, LEGACY_HEADING } from '../src/setup.ts'
+import { CAPABILITIES, GEMINI_POLICY_FILE, checkMemory, geminiPolicyPath, findLegacy, installAgents, manifest, removeLegacy, setupTool, uninstallAgents, uninstallTool, LEGACY_HEADING } from '../src/setup.ts'
 import { VERSION } from '../src/version.ts'
 
 const BIN = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'src', 'bin', 'nursery.ts')
@@ -173,4 +173,36 @@ test('the CLI reports capabilities as one json line and rejects unknown commands
   const plain = run('bogus')
   assert.equal(plain.status, 2)
   assert.match(plain.stdout + plain.stderr, /Uso:/)
+})
+
+test('gemini gets the plan-mode policy for read-only subagents, kept in sync and removed on uninstall', async (t) => {
+  const { homes, options } = await sandbox(t)
+  const file = path.join(homes.gemini, 'policies', 'nursery.toml')
+  assert.equal(geminiPolicyPath(options), file)
+  const policy = await readFile(GEMINI_POLICY_FILE, 'utf8')
+
+  const first = await installAgents(['gemini'], options)
+  assert.deepEqual(first.filter((step) => step.item === 'plan policy').map((step) => [step.agent, step.state, step.path]), [['gemini', 'installed', file]])
+  assert.equal(await readFile(file, 'utf8'), policy)
+  assert.match(policy, /toolName = "invoke_agent"/)
+  assert.match(policy, /modes = \["plan"\]/)
+
+  const second = await installAgents(['gemini'], options)
+  assert.deepEqual(second.filter((step) => step.item === 'plan policy').map((step) => step.state), ['present'])
+
+  await writeFile(file, '# stale\n')
+  const third = await installAgents(['gemini'], options)
+  assert.deepEqual(third.filter((step) => step.item === 'plan policy').map((step) => step.state), ['installed'])
+  assert.equal(await readFile(file, 'utf8'), policy)
+
+  const removed = await uninstallAgents(options)
+  assert.deepEqual(removed.filter((step) => step.item === 'plan policy').map((step) => [step.agent, step.state]), [['gemini', 'removed']])
+  assert.ok(!existsSync(file))
+})
+
+test('the gemini plan policy is not written when gemini is not a target', async (t) => {
+  const { homes, options } = await sandbox(t)
+  const steps = await installAgents(['claude'], options)
+  assert.ok(!steps.some((step) => step.item === 'plan policy'))
+  assert.ok(!existsSync(path.join(homes.gemini, 'policies', 'nursery.toml')))
 })
