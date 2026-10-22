@@ -84,9 +84,10 @@ Hay varias sesiones a la vez sobre el mismo repo; el worktree evita que se pisen
 - Cada parte en paralelo del mismo repo trabaja en su propio worktree y sub-rama; las sub-ramas son solo locales: se integran en la rama de la tarea y se borran con su worktree; al remoto solo sube la rama principal ya lista.
 :::
 ::: agent gemini
-- En modo plan, investiga con `invoke_agent` a `researcher` (y `analyst`/`architect` si hace falta); si la política lo niega, `codebase_investigator`. No leas archivo por archivo.
-- Búsquedas independientes, juntas en un turno; archivos completos salvo que pasen de ~1000 líneas.
-- A ~15 llamadas sin plan, escríbelo con lo que haya, marca los huecos como dudas abiertas y ciérralo con `exit_plan_mode`.
-- Para planear, modelo `auto`: planea con Pro y ejecuta con Flash.
+- En modo plan, investiga con `invoke_agent` a `researcher` (o `analyst`/`architect`); si la política lo niega, `codebase_investigator`. No leas archivo por archivo.
+- Ahí los subagentes no tienen shell, solo lectura, búsqueda y web; el resto, fuera del plan.
+- Búsquedas independientes en un solo turno; archivos completos hasta ~1000 líneas.
+- A ~15 llamadas sin plan, escríbelo con lo que haya, huecos como dudas abiertas, y ciérralo con `exit_plan_mode`.
+- Modelo `auto`: Pro planea y Flash ejecuta.
 :::
 - Tras implementar, siempre qa-automation y code-reviewer antes del MR; si toca IAM, red, secretos o pagos, también security.

@@ -192,8 +192,11 @@ test('gemini gets the plan-mode policy for read-only subagents, kept in sync and
 
   await writeFile(file, '# stale\n')
   const third = await installAgents(['gemini'], options)
-  assert.deepEqual(third.filter((step) => step.item === 'plan policy').map((step) => step.state), ['installed'])
+  const updated = third.filter((step) => step.item === 'plan policy')
+  assert.deepEqual(updated.map((step) => step.state), ['installed'])
+  assert.match(updated[0]!.detail, /nursery\.toml\.bak/)
   assert.equal(await readFile(file, 'utf8'), policy)
+  assert.equal(await readFile(`${file}.bak`, 'utf8'), '# stale\n')
 
   const removed = await uninstallAgents(options)
   assert.deepEqual(removed.filter((step) => step.item === 'plan policy').map((step) => [step.agent, step.state]), [['gemini', 'removed']])
@@ -205,4 +208,17 @@ test('the gemini plan policy is not written when gemini is not a target', async 
   const steps = await installAgents(['claude'], options)
   assert.ok(!steps.some((step) => step.item === 'plan policy'))
   assert.ok(!existsSync(path.join(homes.gemini, 'policies', 'nursery.toml')))
+})
+
+test('uninstall leaves an edited gemini plan policy in place', async (t) => {
+  const { homes, options } = await sandbox(t)
+  const file = path.join(homes.gemini, 'policies', 'nursery.toml')
+  await installAgents(['gemini'], options)
+  await writeFile(file, '# mine\n')
+
+  const removed = await uninstallAgents(options)
+  const steps = removed.filter((step) => step.item === 'plan policy')
+  assert.deepEqual(steps.map((step) => [step.agent, step.state, step.path]), [['gemini', 'skipped', file]])
+  assert.match(steps[0]!.detail, /differs/)
+  assert.equal(await readFile(file, 'utf8'), '# mine\n')
 })

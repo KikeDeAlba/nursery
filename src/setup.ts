@@ -93,14 +93,19 @@ async function installGeminiPolicy(options: agents.InstallOptions): Promise<agen
   const current = existsSync(file) ? await readFile(file, 'utf8') : null
   if (current === policy) return { agent: 'gemini', item: 'plan policy', state: 'present', detail: `${file} is up to date`, path: file }
   await mkdir(path.dirname(file), { recursive: true })
+  if (current !== null) await copyFile(file, `${file}.bak`)
   await writeFile(file, policy)
-  const detail = current === null ? `wrote ${file}` : `updated ${file}`
+  const detail = current === null ? `wrote ${file}` : `updated ${file} (copy of the previous one in ${file}.bak)`
   return { agent: 'gemini', item: 'plan policy', state: 'installed', detail, path: file }
 }
 
 async function uninstallGeminiPolicy(options: agents.InstallOptions): Promise<agents.Step | null> {
   const file = geminiPolicyPath(options)
   if (!existsSync(file)) return null
+  const policy = await readFile(GEMINI_POLICY_FILE, 'utf8')
+  if ((await readFile(file, 'utf8')) !== policy) {
+    return { agent: 'gemini', item: 'plan policy', state: 'skipped', detail: `${file} differs from the nursery policy; it was left in place`, path: file }
+  }
   await rm(file, { force: true })
   return { agent: 'gemini', item: 'plan policy', state: 'removed', detail: `removed ${file}`, path: file }
 }

@@ -113,10 +113,13 @@ El modo plan de Gemini CLI solo deja usar sus propios subagentes, y una
 extensión no puede habilitar otros. Por eso `nursery setup` instala la política
 de usuario `~/.gemini/policies/nursery.toml`, que permite en modo plan a
 `researcher`, `analyst`, `architect`, `security`, `code-reviewer` y `sre`.
-Dentro de plan, `researcher` solo puede correr git de lectura y `npm view`.
+En modo plan los subagentes de nursery no tienen shell: solo herramientas de
+lectura, búsqueda y web; el resto de su trabajo lo hacen fuera del modo plan.
 Para planear conviene el modelo `auto`: con él, `general.plan.modelRouting`
 planea con Pro y ejecuta con Flash; con un modelo fijo no hay ese cambio.
-`nursery uninstall` quita la política.
+Si ya había una política distinta, `nursery setup` la respalda en
+`nursery.toml.bak` antes de reemplazarla. `nursery uninstall` quita la política
+solo si no se editó; si se editó, la deja y lo avisa.
 
 ## Delegación automática
 
