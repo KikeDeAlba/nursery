@@ -38,7 +38,7 @@ nursery setup
 | Claude Code | plugin `nursery` | `~/.claude/CLAUDE.md` |
 | opencode | `~/.config/opencode/agents/*.md` | `~/.config/opencode/AGENTS.md` |
 | Codex | `~/.codex/agents/*.toml` | `~/.codex/AGENTS.md` |
-| Gemini CLI | extensión `nursery`, `agents/*.md`, y política `~/.gemini/policies/nursery.toml` para el modo plan | `~/.gemini/GEMINI.md` |
+| Gemini CLI | extensión `nursery` (`agents/*.md`, `/nursery` y sus hooks) y política `~/.gemini/policies/nursery.toml` para el modo plan | `~/.gemini/GEMINI.md` |
 
 El bloque de reglas va entre `<!-- kit:nursery:begin -->` y
 `<!-- kit:nursery:end -->`; el resto del archivo no se toca. Si el archivo ya
@@ -125,6 +125,36 @@ llamadas independientes y entregar a tiempo.
 Si ya había una política distinta, `nursery setup` la respalda en
 `nursery.toml.bak` antes de reemplazarla. `nursery uninstall` quita la política
 solo si no se editó; si se editó, la deja y lo avisa.
+
+### `/nursery` en Gemini CLI
+
+En Gemini el flujo de nursery no vive en `GEMINI.md`, que lleva las mismas
+reglas que opencode y Codex, sino en `/nursery <pedido>` y en los hooks de la
+extensión. Funciona en cualquier modo de aprobación, también en yolo, y no usa
+el modo plan. Fuera de `/nursery`, Gemini trabaja normal: los hooks no hacen
+nada si la sesión no empezó el flujo.
+
+| Fase | Qué pasa |
+|---|---|
+| Explorar | Gemini invoca al `researcher` si el pedido no es trivial y pregunta solo las dudas que cambian el plan. Tiene 8 lecturas propias; tras la entrega del researcher le quedan 3 como máximo |
+| Propuesta | Gemini la presenta con `ask_user`: una pregunta con header «Propuesta», la propuesta completa y las opciones «Aceptar» y «Corregir» |
+| Corrección | Si el usuario corrige, con el diálogo o con un mensaje, vuelve a explorar con 3 lecturas y propone de nuevo, las veces que haga falta |
+| Ejecución | Ya aceptada, cada paso va a su agente con `invoke_agent`, en paralelo los independientes; Gemini solo escribe archivos `.md` |
+| Validación | Antes de cerrar tienen que pasar `qa-automation` y `code-reviewer`; si faltan, el hook le pide lanzarlos, hasta 2 reintentos |
+
+Antes de aceptar, el hook bloquea escribir archivos (`write_file`, `replace`),
+usar el shell en el hilo principal, invocar a `developer`, `devops`,
+`qa-automation` o `documenter`, leer más allá del tope y presentar una propuesta
+con otro formato. Al negar, el motivo dice qué hacer en su lugar.
+
+Cada `/nursery` deja una bitácora del plan en
+`~/.gemini/nursery/plans/<proyecto>/<fecha>-<slug>.md`, con el pedido, cada
+propuesta, las correcciones, los agentes y la validación. `NURSERY_PLANS_DIR`
+cambia el directorio base, y `NURSERY_FLOW=off` desactiva el flujo sin
+desinstalar nada.
+
+No funciona en modo headless (`gemini -p`): ahí `ask_user` se niega, así que no
+hay forma de aceptar la propuesta.
 
 ## Delegación automática
 
@@ -262,7 +292,7 @@ Las pruebas fallan si:
 - una descripción pasa de 300 caracteres, o todas juntas pasan de 2,500;
 - dos agentes comparten una frase disparadora;
 - un cuerpo pasa de 80 líneas o repite texto de `rules/RULES.md`;
-- el bloque de reglas pasa de 5,200 caracteres (5,600 en Gemini), o su sección «Delegación» no nombra
+- el bloque de reglas pasa de 5,200 caracteres, o su sección «Delegación» no nombra
   a los diez agentes;
 - developer, devops o qa-automation no saben entregar como parte (sin push ni MR).
 
