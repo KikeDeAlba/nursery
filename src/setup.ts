@@ -95,7 +95,7 @@ export function shellCommand(parts: readonly string[], platform: PlatformContext
 }
 
 export async function geminiHooks(ctx: PlatformContext = platformContext()): Promise<agents.HookMap> {
-  const bin = shellCommand(await stableBinCommand(ctx), ctx.platform)
+  const bin = shellCommand(binCommand(), ctx.platform)
   const hooks: agents.HookMap = {}
   for (const event of HOOK_EVENTS) {
     const matcher = GEMINI_HOOK_MATCHERS[event]
