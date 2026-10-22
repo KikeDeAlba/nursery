@@ -28,10 +28,7 @@ export const MIN_PROPOSAL_CHARS = 80
 
 const WRITE_TOOLS: readonly string[] = ['write_file', 'replace']
 const SEARCH_TOOL = 'search_file_content'
-const ACCEPTANCES = new Set([
-  'acepto', 'aceptar', 'aceptado', 'aceptada', 'acepta', 'si', 'si acepto', 'dale', 'adelante', 'si adelante',
-  'ok', 'okay', 'va', 'de acuerdo', 'aprobado', 'apruebo', 'procede', 'hazlo',
-])
+const ACCEPTANCES = new Set(['acepto', 'acepto el plan', 'aceptar', 'aceptado', 'aceptada', 'apruebo', 'aprobado'])
 
 const Q = 'con ask_user (header "Propuesta", opciones "Aceptar" y "Corregir")'
 const TAG = '[nursery] '
@@ -63,6 +60,7 @@ export const REASON = {
   readsProposed: `La propuesta está en revisión. Espera la respuesta del usuario o vuelve a proponer ${Q}.`,
   format: 'Propuesta con formato inválido. Usa ask_user con una sola pregunta header "Propuesta", type "choice", sin multiSelect, la propuesta completa en question (80 caracteres o más) y las opciones "Aceptar" y "Corregir".',
   writeAccepted: 'Plan aceptado: el código lo escriben developer o devops con invoke_agent. Tú solo puedes escribir archivos .md.',
+  unreadable: 'El estado del flujo de nursery no se pudo leer. Vuelve a lanzar /nursery o desactívalo con NURSERY_FLOW=off.',
   validate: (qa: boolean, review: boolean) => `Falta validar: lanza ${missing(qa, review)} con invoke_agent sobre los cambios y corrige lo que reporten antes de cerrar.`,
 }
 
@@ -382,6 +380,7 @@ function answerOf(resp: ToolResponse, index: number): { kind: 'dismissed'; logge
     return { kind: 'dismissed', logged: false }
   }
   const answers = isRecord(parsed) ? parsed['answers'] : undefined
+  if (isRecord(answers) && Object.keys(answers).length === 0) return { kind: 'dismissed', logged: true }
   const answer = isRecord(answers) ? answers[String(index)] : undefined
   if (Array.isArray(answer)) return { kind: 'answer', text: answer.map(String).join(', ') }
   if (typeof answer === 'string') return { kind: 'answer', text: answer }
@@ -395,7 +394,9 @@ function afterAsk(state: FlowState, event: AfterToolEvent, now: Date): StepOutpu
   const p = state.planPath
   const answer = answerOf(event.tool_response ?? {}, found.index)
   if (answer.kind === 'dismissed') {
-    return out(state, context('AfterTool', CONTEXT.dismissed()), answer.logged ? [{ kind: 'dismissed', file: p, at }] : [])
+    const log: PlanLogEntry[] = answer.logged ? [{ kind: 'dismissed', file: p, at }] : []
+    log.push({ kind: 'phase', file: p, phase: 'explore' })
+    return out(patch(state, { phase: 'explore', reads: { used: 0, limit: READ_LIMIT_AFTER } }, now), context('AfterTool', CONTEXT.dismissed()), log)
   }
   if (isAcceptance(answer.text)) {
     return out(patch(state, ACCEPT_CHANGES, now), context('AfterTool', CONTEXT.accepted(p)), [
@@ -446,6 +447,17 @@ function afterAgent(state: FlowState, _event: AfterAgentEvent, now: Date): StepO
   return out(base)
 }
 
+export function failResult(event: HookEvent): HookResult {
+  if (!isRecord(event) || event.hook_event_name !== 'BeforeTool') return NONE
+  const tool = asString(event.tool_name)
+  const input = isRecord(event.tool_input) ? event.tool_input : {}
+  const risky = WRITE_TOOLS.includes(tool)
+    || tool === 'run_shell_command'
+    || (tool === 'invoke_agent' && WORK_AGENTS.includes(asString(input['agent_name'])))
+    || (tool.startsWith('mcp_') && !isMcpRead(tool))
+  return risky ? deny(REASON.unreadable) : NONE
+}
+
 export function step(state: FlowState | null, event: HookEvent, now: Date, env: FlowEnv): StepOutput {
   try {
     if (env.off) return out(state)
@@ -464,6 +476,6 @@ export function step(state: FlowState | null, event: HookEvent, now: Date, env: 
         return out(state)
     }
   } catch {
-    return out(state)
+    return out(state, failResult(event))
   }
 }

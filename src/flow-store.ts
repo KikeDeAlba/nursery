@@ -21,7 +21,14 @@ function errorCode(error: unknown): string | undefined {
   return error instanceof Error && 'code' in error ? String(error.code) : undefined
 }
 
-export async function loadState(file: string): Promise<FlowState | null> {
+const PHASES: readonly string[] = ['explore', 'proposed', 'accepted', 'done']
+
+export function isInside(dir: string, file: string): boolean {
+  const relative = path.relative(path.resolve(dir), path.resolve(file))
+  return relative.length > 0 && !relative.startsWith('..') && !path.isAbsolute(relative)
+}
+
+export async function loadState(file: string, plansDir?: string): Promise<FlowState | null> {
   let text: string
   try {
     text = await readFile(file, 'utf8')
@@ -39,6 +46,9 @@ export async function loadState(file: string): Promise<FlowState | null> {
   const state = value as Partial<FlowState>
   if (state.version !== 1) return null
   if (state.sessionId !== path.basename(file, '.json')) return null
+  if (typeof state.phase !== 'string' || !PHASES.includes(state.phase)) return null
+  if (typeof state.planPath !== 'string') return null
+  if (plansDir !== undefined && !isInside(plansDir, state.planPath)) return null
   return state as FlowState
 }
 

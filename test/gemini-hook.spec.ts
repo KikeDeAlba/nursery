@@ -141,3 +141,81 @@ test('the gemini-hook subcommand always exits 0 with one json line on stdout', a
   }
   assert.ok(!existsSync(flowDir(geminiHome)))
 })
+
+const UNREADABLE = { decision: 'deny', reason: 'El estado del flujo de nursery no se pudo leer. Vuelve a lanzar /nursery o desactívalo con NURSERY_FLOW=off.' }
+
+function activeState(root: string, overrides: Partial<FlowState> = {}): FlowState {
+  return {
+    version: 1,
+    sessionId: 's1',
+    cwd: root,
+    request: 'agrega X',
+    planPath: path.join(root, 'plans', 'demo', 'p.md'),
+    phase: 'explore',
+    startedAt: '2026-10-22T09:00:00.000Z',
+    updatedAt: '2026-10-22T09:00:00.000Z',
+    activeAgents: 0,
+    researched: false,
+    reads: { used: 0, limit: 8 },
+    proposals: 0,
+    corrections: 0,
+    changed: false,
+    validation: { qa: false, review: false },
+    retries: { validation: 0, gaveUp: false },
+    ...overrides,
+  }
+}
+
+function tool(root: string, tool_name: string, tool_input: Record<string, unknown> = {}): string {
+  return JSON.stringify({ session_id: 's1', cwd: root, tool_name, tool_input })
+}
+
+async function expectFailClosed(root: string, deps: GeminiHookDeps): Promise<void> {
+  for (const [name, input] of [['write_file', { file_path: 'a.ts' }], ['replace', { file_path: 'a.ts' }], ['run_shell_command', { command: 'ls' }], ['invoke_agent', { agent_name: 'developer' }], ['mcp_jira_createIssue', {}]] as const) {
+    const result = await quietly(() => runGeminiHook('BeforeTool', tool(root, name, input), deps))
+    assert.deepEqual(result.value, UNREADABLE, name)
+    assert.match(result.stderr, /^nursery gemini-hook: /)
+  }
+  for (const [name, input] of [['read_file', {}], ['invoke_agent', { agent_name: 'researcher' }], ['mcp_jira_getIssue', {}]] as const) {
+    assert.deepEqual((await quietly(() => runGeminiHook('BeforeTool', tool(root, name, input), deps))).value, {}, name)
+  }
+  assert.deepEqual((await quietly(() => runGeminiHook('AfterAgent', JSON.stringify({ session_id: 's1', cwd: root, prompt: 'x', prompt_response: 'y' }), deps))).value, {})
+}
+
+test('a corrupt state file fails closed for risky tools and a new /nursery replaces it', async (t) => {
+  const { root, geminiHome, deps } = await sandbox(t)
+  const file = statePath(flowDir(geminiHome), 's1')
+  await mkdir(path.dirname(file), { recursive: true })
+  await writeFile(file, '{not json')
+  await expectFailClosed(root, deps)
+  assert.equal(await readFile(file, 'utf8'), '{not json')
+  const restarted = await runGeminiHook('BeforeAgent', start(root), deps)
+  assert.ok('hookSpecificOutput' in restarted)
+  assert.equal(JSON.parse(await readFile(file, 'utf8')).phase, 'explore')
+})
+
+test('a state whose plan path leaves the plans directory is treated as unreadable', async (t) => {
+  const { root, geminiHome, deps } = await sandbox(t)
+  const file = statePath(flowDir(geminiHome), 's1')
+  await saveState(file, activeState(root, { planPath: path.join(root, 'plans', '..', 'outside.md') }))
+  await expectFailClosed(root, deps)
+  await saveState(file, activeState(root))
+  assert.deepEqual(await runGeminiHook('BeforeTool', tool(root, 'read_file'), deps), {})
+})
+
+test('a lock that is never released fails closed for risky tools', async (t) => {
+  const { root, geminiHome, deps } = await sandbox(t)
+  const file = statePath(flowDir(geminiHome), 's1')
+  await saveState(file, activeState(root))
+  await mkdir(`${file}.lock`)
+  const result = await quietly(() => runGeminiHook('BeforeTool', tool(root, 'write_file', { file_path: 'a.ts' }), deps))
+  assert.deepEqual(result.value, UNREADABLE)
+  assert.match(result.stderr, /timed out/)
+})
+
+test('an active flow denies unknown tools before acceptance through the adapter', async (t) => {
+  const { root, geminiHome, deps } = await sandbox(t)
+  await saveState(statePath(flowDir(geminiHome), 's1'), activeState(root))
+  const result = await runGeminiHook('BeforeTool', tool(root, 'mcp_jira_transitionIssue'), deps)
+  assert.ok('decision' in result && result.decision === 'deny')
+})

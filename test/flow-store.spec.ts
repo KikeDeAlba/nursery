@@ -76,6 +76,25 @@ test('loadState returns null for a missing, corrupt, other-version or other-sess
 
   await writeFile(file, JSON.stringify(sampleState('s2')))
   assert.equal(await loadState(file), null)
+
+  await writeFile(file, JSON.stringify({ ...sampleState('s1'), phase: 'bogus' }))
+  assert.equal(await loadState(file), null)
+
+  await writeFile(file, JSON.stringify({ ...sampleState('s1'), planPath: 42 }))
+  assert.equal(await loadState(file), null)
+})
+
+test('loadState rejects a plan path outside the plans directory', async (t) => {
+  const dir = await sandbox(t)
+  const file = statePath(dir, 's1')
+  const state = sampleState('s1')
+  await saveState(file, state)
+  assert.deepEqual(await loadState(file, '/plans'), state)
+  assert.deepEqual(await loadState(file, '/plans/'), state)
+  for (const planPath of ['/plans-evil/x.md', '/plans/../etc/x.md', '/plans', '/other/x.md', 'relative/x.md']) {
+    await saveState(file, { ...state, planPath })
+    assert.equal(await loadState(file, '/plans'), null, planPath)
+  }
 })
 
 test('withSessionLock runs the callbacks one at a time and releases the lock', async (t) => {

@@ -14,6 +14,7 @@ import {
   agentOutcome,
   extractRequest,
   findProposal,
+  failResult,
   isAcceptance,
   isFlowStart,
   isMcpRead,
@@ -127,8 +128,8 @@ describe('helpers', () => {
   })
 
   test('isAcceptance only accepts the exact listed phrases', () => {
-    for (const text of ['Acepto', 'sí', 'Sí, adelante.', 'OK!', 'de acuerdo', 'Hazlo', 'aprobado']) assert.equal(isAcceptance(text), true, text)
-    for (const text of ['acepto pero cambia X', 'no', 'corregir', '']) assert.equal(isAcceptance(text), false, text)
+    for (const text of ['Acepto', '¡Acepto el plan!', 'Aceptar', 'aceptado', 'Aceptada.', 'apruebo', 'APROBADO']) assert.equal(isAcceptance(text), true, text)
+    for (const text of ['sí', 'si acepto', 'Sí, adelante.', 'OK!', 'okay', 'va', 'dale', 'adelante', 'procede', 'Hazlo', 'de acuerdo', 'acepta', 'acepto pero cambia X', 'no', 'corregir', '']) assert.equal(isAcceptance(text), false, text)
   })
 
   test('slugify joins words and cuts on a word boundary', () => {
@@ -254,6 +255,18 @@ describe('general', () => {
     const bad = { ...BASE, hook_event_name: 'AfterTool', tool_name: 'invoke_agent', tool_input: null } as unknown as HookEvent
     assert.doesNotThrow(() => step(s, bad, LATER, ENV))
   })
+
+  test('failResult denies only risky tools', () => {
+    const reasonText = 'El estado del flujo de nursery no se pudo leer. Vuelve a lanzar /nursery o desactívalo con NURSERY_FLOW=off.'
+    for (const event of [beforeTool('write_file'), beforeTool('replace'), beforeTool('run_shell_command'), beforeTool('invoke_agent', agentCall('developer')), beforeTool('mcp_jira_createIssue')]) {
+      denied(failResult(event), reasonText)
+    }
+    for (const event of [beforeTool('read_file'), beforeTool('invoke_agent', agentCall('researcher')), beforeTool('mcp_jira_getIssue'), beforeTool('ask_user'), beforeAgent('x'), afterAgent()]) {
+      assert.deepEqual(failResult(event), {})
+    }
+    const malformed = { ...BASE, hook_event_name: 'BeforeTool', tool_name: 'invoke_agent', tool_input: null } as unknown as HookEvent
+    assert.deepEqual(failResult(malformed), {})
+  })
 })
 
 describe('start', () => {
@@ -311,13 +324,13 @@ describe('BeforeAgent', () => {
 
   test('acceptance in explore says there is no proposal', () => {
     const s = state()
-    const out = run(s, beforeAgent('Sí'))
+    const out = run(s, beforeAgent('Acepto'))
     assert.equal(out.state, s)
     assert.equal(ctx(out.result), `[nursery] Fase: explorar. Aún no hay una propuesta pendiente: preséntala ${Q} para que el usuario la acepte. Plan: ${P}`)
   })
 
   test('acceptance by text in proposed accepts the plan', () => {
-    const out = run(state({ phase: 'proposed', activeAgents: 1, changed: true, validation: { qa: true, review: true } }), beforeAgent('Dale'))
+    const out = run(state({ phase: 'proposed', activeAgents: 1 }), beforeAgent('Acepto'))
     assert.equal(out.state?.phase, 'accepted')
     assert.equal(out.state?.activeAgents, 0)
     assert.equal(out.state?.changed, false)
@@ -325,6 +338,14 @@ describe('BeforeAgent', () => {
     assert.equal(out.state?.updatedAt, AT)
     assert.equal(ctx(out.result), `[nursery] Plan aceptado. Ejecuta cada paso con su agente (invoke_agent), en paralelo los independientes, y termina con qa-automation y code-reviewer. Tú solo escribes archivos .md. Plan: ${P}`)
     assert.deepEqual(out.log, [{ kind: 'accepted', file: P, at: AT, via: 'text' }, { kind: 'phase', file: P, phase: 'accepted' }])
+  })
+
+  test('loose agreement in proposed is a correction, not an acceptance', () => {
+    for (const text of ['sí', 'ok', 'dale', 'adelante', 'hazlo']) {
+      const out = run(state({ phase: 'proposed' }), beforeAgent(text))
+      assert.equal(out.state?.phase, 'explore', text)
+      assert.equal(out.state?.corrections, 1, text)
+    }
   })
 
   test('any other text in proposed is a correction', () => {
@@ -611,21 +632,31 @@ describe('AfterTool of ask_user', () => {
     assert.ok(ctx(out.result)?.includes(`«${'y'.repeat(500)}»`))
   })
 
-  test('a dismissed dialog keeps the proposal and logs it', () => {
-    const s = proposed()
-    const out = run(s, afterTool('ask_user', proposalInput(), { llmContent: 'User dismissed ask_user dialog without answering.' }))
-    assert.equal(out.state, s)
-    assert.equal(ctx(out.result), '[nursery] El usuario cerró la propuesta sin responder. No ejecutes nada: termina el turno y espera su respuesta.')
-    assert.deepEqual(out.log, [{ kind: 'dismissed', file: P, at: AT }])
+  test('a dismissed dialog or empty answers go back to explore and log it', () => {
+    for (const response of [{ llmContent: 'User dismissed ask_user dialog without answering.' }, { llmContent: '{"answers":{}}' }]) {
+      const out = run(state({ phase: 'proposed', proposals: 1, reads: { used: 2, limit: 3 }, corrections: 1 }), afterTool('ask_user', proposalInput(), response))
+      assert.equal(out.state?.phase, 'explore')
+      assert.deepEqual(out.state?.reads, { used: 0, limit: 3 })
+      assert.equal(out.state?.corrections, 1)
+      assert.equal(ctx(out.result), '[nursery] El usuario cerró la propuesta sin responder. No ejecutes nada: termina el turno y espera su respuesta.')
+      assert.deepEqual(out.log, [{ kind: 'dismissed', file: P, at: AT }, { kind: 'phase', file: P, phase: 'explore' }])
+    }
   })
 
-  test('an error or invalid JSON is treated as dismissed without logging', () => {
+  test('acceptance by text after a dismissed dialog finds no proposal', () => {
+    const dismissed = run(proposed(), afterTool('ask_user', proposalInput(), { llmContent: '{"answers":{}}' })).state
+    assert.ok(dismissed)
+    const out = run(dismissed, beforeAgent('acepto'))
+    assert.equal(out.state?.phase, 'explore')
+    assert.equal(ctx(out.result), CONTEXT.noProposal(P))
+  })
+
+  test('an error or invalid JSON goes back to explore without the dismissed entry', () => {
     for (const response of [{ error: 'boom' }, { llmContent: 'not json' }]) {
-      const s = proposed()
-      const out = run(s, afterTool('ask_user', proposalInput(), response))
-      assert.equal(out.state, s)
+      const out = run(proposed(), afterTool('ask_user', proposalInput(), response))
+      assert.equal(out.state?.phase, 'explore')
       assert.equal(ctx(out.result), CONTEXT.dismissed())
-      assert.deepEqual(out.log, [])
+      assert.deepEqual(out.log, [{ kind: 'phase', file: P, phase: 'explore' }])
     }
   })
 
