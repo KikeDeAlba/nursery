@@ -1,0 +1,7 @@
+[[rule]]
+name = "nursery read-only subagents in Plan mode"
+toolName = "invoke_agent"
+argsPattern = '''\x00"agent_name":"(researcher|analyst|architect|security|code-reviewer|sre)"\x00'''
+decision = "allow"
+priority = 100
+modes = ["plan"]
