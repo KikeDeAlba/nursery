@@ -501,9 +501,9 @@ describe('BeforeTool before acceptance', () => {
     denied(run(state({ ...full, researched: true }), beforeTool('read_file')).result, `Ya tienes la entrega del researcher. Pregunta tus dudas y presenta la propuesta ${Q}.`)
   })
 
-  test('isMcpRead looks at the verb that starts the last segment', () => {
-    for (const tool of ['mcp_a_getIssue', 'mcp_a_get', 'mcp_a__search', 'mcp_a_b_listSites', 'mcp_a_Fetch2', 'mcp_a_view-page']) assert.equal(isMcpRead(tool), true, tool)
-    for (const tool of ['getIssue', 'mcp_gitlab_list_merge_requests', 'mcp_a_createIssue', 'mcp_a_findings', 'mcp_a_showcase', 'mcp_a_get_and_delete', 'mcp_', 'mcp_a_']) assert.equal(isMcpRead(tool), false, tool)
+  test('isMcpRead reads the first verb after the server and denies any write verb', () => {
+    for (const tool of ['mcp_a_getIssue', 'mcp_a_get', 'mcp_a__search', 'mcp_a_b_listSites', 'mcp_a_view-page', 'mcp_atl_jira_get_issue', 'mcp_atl_jira_comments', 'mcp_atl_api_describe', 'mcp_atl_api_search', 'mcp_elastic-logs_search_logs', 'mcp_elastic-logs_get_log_trace', 'mcp_gitlab_list_merge_requests']) assert.equal(isMcpRead(tool), true, tool)
+    for (const tool of ['getIssue', 'mcp_a_createIssue', 'mcp_a_findings', 'mcp_a_showcase', 'mcp_a_get_and_delete', 'mcp_atl_api_call', 'mcp_atl_jira_add_comment', 'mcp_gitlab_merge_merge_request', 'mcp_get_x', 'mcp_', 'mcp_a_']) assert.equal(isMcpRead(tool), false, tool)
   })
 })
 

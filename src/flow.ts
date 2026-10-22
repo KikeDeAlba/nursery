@@ -16,7 +16,9 @@ import type {
 
 export const MARKER = '[nursery-flow]'
 export const READ_TOOLS: readonly string[] = ['read_file', 'read_many_files', 'grep_search', 'glob', 'list_directory', 'google_web_search', 'web_fetch']
-export const MCP_READ_VERBS: readonly string[] = ['get', 'search', 'list', 'read', 'describe', 'view', 'query', 'fetch', 'find', 'show', 'comments', 'sites', 'count']
+export const MCP_READ_VERBS: readonly string[] = ['get', 'search', 'list', 'read', 'describe', 'view', 'query', 'fetch', 'find', 'show', 'comments', 'sites', 'count', 'check', 'inspect']
+export const MCP_WRITE_VERBS: readonly string[] = ['create', 'update', 'delete', 'remove', 'add', 'set', 'transition', 'post', 'put', 'patch', 'call', 'write', 'edit', 'upload', 'send', 'publish', 'execute', 'run', 'trigger', 'deploy', 'insert', 'rename', 'archive', 'assign', 'approve', 'worklog']
+export const MCP_MIXED_VERBS: readonly string[] = ['merge', 'close', 'move', 'cancel', 'restart', 'start', 'stop', 'apply', 'commit', 'push']
 export const FREE_TOOLS: readonly string[] = ['update_topic', 'write_todos', 'activate_skill']
 export const READ_AGENTS: readonly string[] = ['researcher', 'analyst', 'architect', 'security', 'code-reviewer', 'sre']
 export const WORK_AGENTS: readonly string[] = ['developer', 'devops', 'qa-automation', 'documenter']
@@ -81,9 +83,11 @@ function truncate(text: string, max: number): string {
 
 export function isMcpRead(tool: string): boolean {
   if (!tool.startsWith('mcp_')) return false
-  const last = tool.split('_').filter(Boolean).at(-1) ?? ''
-  const lower = last.toLowerCase()
-  return MCP_READ_VERBS.some((verb) => lower.startsWith(verb) && !/[a-z]/.test(last.charAt(verb.length)))
+  const [, , ...rest] = tool.split('_')
+  const words = rest.join('_').replace(/([a-z0-9])([A-Z])/g, '$1_$2').toLowerCase().split(/[^a-z0-9]+/).filter(Boolean)
+  if (words.some((word) => MCP_WRITE_VERBS.includes(word))) return false
+  const verb = words.find((word) => MCP_READ_VERBS.includes(word) || MCP_MIXED_VERBS.includes(word))
+  return verb !== undefined && MCP_READ_VERBS.includes(verb)
 }
 
 function isReadTool(tool: string): boolean {
