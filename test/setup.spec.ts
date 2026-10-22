@@ -67,6 +67,8 @@ test('a clean install writes rules and subagents for every agent, and a second r
   assert.match(await readFile(path.join(homes.opencode, 'agents', 'developer.md'), 'utf8'), /mode: subagent/)
   assert.match(await readFile(path.join(homes.codex, 'agents', 'security.toml'), 'utf8'), /model_reasoning_effort = "high"/)
   assert.match(await readFile(path.join(homes.gemini, 'extensions', 'nursery', 'agents', 'code-reviewer.md'), 'utf8'), /kind: local/)
+  assert.match(await readFile(path.join(homes.gemini, 'extensions', 'nursery', 'agents', 'researcher.md'), 'utf8'), /^max_turns: 60$/m)
+  assert.match(await readFile(path.join(homes.opencode, 'agents', 'researcher.md'), 'utf8'), /^steps: 30$/m)
   assert.ok(existsSync(path.join(homes.codex, 'prompts', 'nursery.md')))
 
   assert.ok((await checkMemory('all', options)).every((report) => report.state === 'current'))

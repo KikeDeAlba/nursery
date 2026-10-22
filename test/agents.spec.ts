@@ -138,7 +138,7 @@ test('trigger phrases are not shared between agents', async () => {
 
 test('bodies are short, end with the handoff and do not repeat the general rules', async () => {
   const rules = (await readFile(RULES_FILE, 'utf8')).split('\n').map((line) => line.trim()).filter((line) => line.length >= 40)
-  for (const agent of await loadAgents()) {
+  for (const agent of (await Promise.all(TOOLS.map(loadRendered))).flat()) {
     assert.ok(agent.body.split('\n').length <= BODY_MAX_LINES, `${agent.name}: body too long`)
     assert.match(agent.body, /## Entrega/)
     for (const line of rules) assert.ok(!agent.body.includes(line), `${agent.name} repeats: ${line}`)
@@ -175,6 +175,22 @@ test('the researcher is read-only and starts the planned chains', async () => {
     const row = skill.split('\n').find((line) => line.startsWith(`| ${chain} |`))
     assert.match(row ?? '', /^\| [^|]+ \| researcher → /, `${chain} does not start with researcher`)
   }
+})
+
+test('the gemini researcher gets a larger budget and parallel guidance, the others do not', async () => {
+  const portable = (await loadAgents(SUBAGENTS_DIR)).find((agent) => agent.name === 'researcher')?.text ?? ''
+  const guide = /presupuesto de turnos/
+  const gemini = agents.subagentForGemini(portable, 'researcher')
+  assert.match(gemini, /^max_turns: 60$/m)
+  assert.match(gemini, guide)
+  for (const phrase of [/misma respuesta/, /read_many_files/, /2 búsquedas como máximo/, /\(\?i\)/, /dos tercios del tope/, /«sin evidencia»/]) assert.match(gemini, phrase)
+  const opencode = agents.subagentForOpenCode(portable, 'researcher')
+  assert.match(opencode, /^steps: 30$/m)
+  assert.doesNotMatch(opencode, guide)
+  assert.doesNotMatch(agents.subagentForCodex(portable, 'researcher'), guide)
+  const claude = (await loadAgents()).find((agent) => agent.name === 'researcher')
+  assert.equal(claude?.attributes['maxTurns'], '30')
+  assert.doesNotMatch(claude?.text ?? '', guide)
 })
 
 test('agents that change code know how to work as one part of a parallel task', async () => {
