@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict'
-import { readFile } from 'node:fs/promises'
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { test } from 'node:test'
 import { agents } from '@kikedealba/kit'
-import { AGENTS_DIR, RULES_FILE, agentNames, buildAgents, renderAgent, staleAgents } from '../src/build.ts'
+import { AGENTS_DIR, RULES_FILE, SUBAGENTS_DIR, agentNames, buildAgents, renderAgent, staleAgents, writeAgents } from '../src/build.ts'
 
 const KNOWN_FIELDS = new Set(['name', 'description', 'tools', 'model', 'effort', 'maxTurns'])
 const KNOWN_TOOLS = new Set(['Read', 'Write', 'Edit', 'Grep', 'Glob', 'Bash', 'Skill', 'WebFetch', 'WebSearch'])
@@ -34,17 +35,52 @@ function assertNoForeignTerms(text: string, agent: keyof typeof FOREIGN_TERMS, l
   for (const term of FOREIGN_TERMS[agent]) assert.ok(!lower.includes(term.toLowerCase()), `${label} for ${agent} mentions ${term}`)
 }
 
-async function loadAgents(): Promise<{ name: string; text: string; attributes: Record<string, string>; body: string }[]> {
+const TOOLS = ['claude', 'codex', 'gemini', 'opencode'] as const
+
+async function loadAgents(dir: string = AGENTS_DIR): Promise<{ name: string; text: string; attributes: Record<string, string>; body: string }[]> {
   return Promise.all(
-    (await agentNames()).map(async (name) => {
-      const text = await readFile(path.join(AGENTS_DIR, `${name}.md`), 'utf8')
+    (await agentNames(dir)).map(async (name) => {
+      const text = await readFile(path.join(dir, `${name}.md`), 'utf8')
       return { name, text, ...agents.parseFrontmatter(text) }
     }),
   )
 }
 
+async function loadRendered(tool: (typeof TOOLS)[number]): Promise<{ name: string; text: string; attributes: Record<string, string>; body: string }[]> {
+  return (await loadAgents(SUBAGENTS_DIR)).map((agent) => {
+    const text = agents.renderForAgent(agent.text, tool)
+    return { name: agent.name, text, ...agents.parseFrontmatter(text) }
+  })
+}
+
 test('the committed agents match their sources', async () => {
   assert.deepEqual(await staleAgents(await buildAgents()), [])
+})
+
+test('the claude agents are the portable subagents rendered for claude', async () => {
+  const claude = await loadAgents()
+  const portable = await loadAgents(SUBAGENTS_DIR)
+  assert.deepEqual(claude.map((agent) => agent.name), portable.map((agent) => agent.name))
+  for (const [index, agent] of claude.entries()) {
+    assert.doesNotMatch(agent.text, /^@include|:::/m, agent.name)
+    assert.equal(agent.text, agents.renderForAgent(portable[index]?.text ?? '', 'claude'), agent.name)
+  }
+})
+
+test('the build writes and checks the claude agents and the portable subagents', async (t) => {
+  const root = await mkdtemp(path.join(tmpdir(), 'nursery-build-'))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const claudeDir = path.join(root, 'agents')
+  const portableDir = path.join(root, 'subagents')
+  const built = [{ name: 'x', content: '---\nname: x\n::: agent gemini\nmaxTurns: 60\n:::\n---\n\nBody\n' }]
+  assert.deepEqual(await staleAgents(built, claudeDir, portableDir), ['agents/x', 'subagents/x'])
+  await writeAgents(built, claudeDir, portableDir)
+  assert.equal(await readFile(path.join(claudeDir, 'x.md'), 'utf8'), '---\nname: x\n---\n\nBody\n')
+  assert.equal(await readFile(path.join(portableDir, 'x.md'), 'utf8'), built[0]?.content)
+  assert.deepEqual(await staleAgents(built, claudeDir, portableDir), [])
+  await writeFile(path.join(portableDir, 'y.md'), 'stale\n')
+  await writeFile(path.join(claudeDir, 'x.md'), 'edited\n')
+  assert.deepEqual(await staleAgents(built, claudeDir, portableDir), ['agents/x', 'subagents/y'])
 })
 
 test('includes are replaced and unknown includes fail', () => {
@@ -52,18 +88,21 @@ test('includes are replaced and unknown includes fail', () => {
   assert.throws(() => renderAgent('@include missing\n', new Map()), /unknown include/)
 })
 
-test('there are ten agents with valid frontmatter', async () => {
-  const loaded = await loadAgents()
-  assert.deepEqual(loaded.map((agent) => agent.name), ['analyst', 'architect', 'code-reviewer', 'developer', 'devops', 'documenter', 'qa-automation', 'researcher', 'security', 'sre'])
-  for (const agent of loaded) {
-    assert.equal(agent.attributes['name'], agent.name)
-    assert.ok(!agent.name.includes(':'))
-    for (const field of Object.keys(agent.attributes)) assert.ok(KNOWN_FIELDS.has(field), `${agent.name}: unknown field ${field}`)
-    assert.ok(MODELS.has(agent.attributes['model'] ?? ''), `${agent.name}: model`)
-    assert.ok(EFFORTS.has(agent.attributes['effort'] ?? ''), `${agent.name}: effort`)
-    assert.ok(Number.parseInt(agent.attributes['maxTurns'] ?? '', 10) > 0, `${agent.name}: maxTurns`)
-    for (const tool of (agent.attributes['tools'] ?? '').split(',').map((item) => item.trim()).filter(Boolean)) assert.ok(KNOWN_TOOLS.has(tool), `${agent.name}: tool ${tool}`)
-    assert.doesNotMatch(agent.text, /^@include|:::/m)
+test('there are ten agents with valid frontmatter for every tool', async () => {
+  for (const tool of TOOLS) {
+    const loaded = await loadRendered(tool)
+    assert.deepEqual(loaded.map((agent) => agent.name), ['analyst', 'architect', 'code-reviewer', 'developer', 'devops', 'documenter', 'qa-automation', 'researcher', 'security', 'sre'])
+    for (const agent of loaded) {
+      const label = `${tool}/${agent.name}`
+      assert.equal(agent.attributes['name'], agent.name, label)
+      assert.ok(!agent.name.includes(':'))
+      for (const field of Object.keys(agent.attributes)) assert.ok(KNOWN_FIELDS.has(field), `${label}: unknown field ${field}`)
+      assert.ok(MODELS.has(agent.attributes['model'] ?? ''), `${label}: model`)
+      assert.ok(EFFORTS.has(agent.attributes['effort'] ?? ''), `${label}: effort`)
+      assert.ok(Number.parseInt(agent.attributes['maxTurns'] ?? '', 10) > 0, `${label}: maxTurns`)
+      for (const item of (agent.attributes['tools'] ?? '').split(',').map((value) => value.trim()).filter(Boolean)) assert.ok(KNOWN_TOOLS.has(item), `${label}: tool ${item}`)
+      assert.doesNotMatch(agent.text, /^@include|:::/m, label)
+    }
   }
 })
 
@@ -180,8 +219,8 @@ test('parallel parts of one repo run in worktrees the orchestrator creates for t
 test('each agent only sees its own tool in the rules, subagents and skill', async () => {
   const rules = await readFile(RULES_FILE, 'utf8')
   const skill = await readFile(SKILL_FILE, 'utf8')
-  const loaded = await loadAgents()
-  for (const agent of ['claude', 'codex', 'gemini', 'opencode'] as const) {
+  const loaded = await loadAgents(SUBAGENTS_DIR)
+  for (const agent of TOOLS) {
     const rendered = agents.renderForAgent(rules, agent)
     assertNoForeignTerms(rendered, agent, 'rules')
     assert.match(rendered, new RegExp(`\\b${OWN_NAME[agent]}\\b`), `rules for ${agent} do not name it`)

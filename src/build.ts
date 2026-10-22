@@ -1,11 +1,13 @@
 import { existsSync } from 'node:fs'
 import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises'
 import path from 'node:path'
+import { agents } from '@kikedealba/kit'
 import { PACKAGE_ROOT } from './version.ts'
 
 export const SOURCE_DIR = path.join(PACKAGE_ROOT, 'src', 'agents')
 export const CONVENTIONS_DIR = path.join(PACKAGE_ROOT, 'src', 'conventions')
 export const AGENTS_DIR = path.join(PACKAGE_ROOT, 'agents')
+export const SUBAGENTS_DIR = path.join(PACKAGE_ROOT, 'subagents')
 export const RULES_FILE = path.join(PACKAGE_ROOT, 'rules', 'RULES.md')
 
 const INCLUDE = /^@include\s+([a-z0-9-]+)\s*$/
@@ -45,20 +47,35 @@ export async function buildAgents(sourceDir: string = SOURCE_DIR, conventionsDir
   return built
 }
 
-export async function staleAgents(built: readonly BuiltAgent[], outputDir: string = AGENTS_DIR): Promise<string[]> {
+export function claudeAgent(content: string): string {
+  return agents.renderForAgent(content, 'claude')
+}
+
+function outputs(built: readonly BuiltAgent[], agentsDir: string, subagentsDir: string): { dir: string; files: Map<string, string> }[] {
+  return [
+    { dir: agentsDir, files: new Map(built.map((agent) => [`${agent.name}.md`, claudeAgent(agent.content)])) },
+    { dir: subagentsDir, files: new Map(built.map((agent) => [`${agent.name}.md`, agent.content])) },
+  ]
+}
+
+export async function staleAgents(built: readonly BuiltAgent[], agentsDir: string = AGENTS_DIR, subagentsDir: string = SUBAGENTS_DIR): Promise<string[]> {
   const stale: string[] = []
-  for (const agent of built) {
-    const file = path.join(outputDir, `${agent.name}.md`)
-    if (!existsSync(file) || (await readFile(file, 'utf8')) !== agent.content) stale.push(agent.name)
+  for (const { dir, files } of outputs(built, agentsDir, subagentsDir)) {
+    const label = (file: string): string => `${path.basename(dir)}/${path.basename(file, '.md')}`
+    for (const [file, content] of files) {
+      const target = path.join(dir, file)
+      if (!existsSync(target) || (await readFile(target, 'utf8')) !== content) stale.push(label(file))
+    }
+    if (existsSync(dir)) for (const file of await markdownFiles(dir)) if (!files.has(file)) stale.push(label(file))
   }
-  const expected = new Set(built.map((agent) => `${agent.name}.md`))
-  if (existsSync(outputDir)) for (const file of await markdownFiles(outputDir)) if (!expected.has(file)) stale.push(path.basename(file, '.md'))
   return stale
 }
 
-export async function writeAgents(built: readonly BuiltAgent[], outputDir: string = AGENTS_DIR): Promise<void> {
-  await mkdir(outputDir, { recursive: true })
-  for (const agent of built) await writeFile(path.join(outputDir, `${agent.name}.md`), agent.content)
+export async function writeAgents(built: readonly BuiltAgent[], agentsDir: string = AGENTS_DIR, subagentsDir: string = SUBAGENTS_DIR): Promise<void> {
+  for (const { dir, files } of outputs(built, agentsDir, subagentsDir)) {
+    await mkdir(dir, { recursive: true })
+    for (const [file, content] of files) await writeFile(path.join(dir, file), content)
+  }
 }
 
 export async function agentNames(outputDir: string = AGENTS_DIR): Promise<string[]> {

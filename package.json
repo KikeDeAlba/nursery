@@ -15,6 +15,7 @@
   "keywords": [
     "subagents",
     "agents",
+    "subagents",
     "rules",
     "cli",
     "claude-code",
@@ -36,6 +37,7 @@
     "dist",
     ".claude-plugin",
     "agents",
+    "subagents",
     "rules",
     "skills",
     "hooks",

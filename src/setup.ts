@@ -4,7 +4,7 @@ import path from 'node:path'
 import { agents } from '@kikedealba/kit'
 import { platformContext, type PlatformContext } from '@kikedealba/kit/platform'
 import { defineManifest, registerTool, stableBin, unregisterTool, type ToolManifest } from '@kikedealba/kit/registry'
-import { AGENTS_DIR, RULES_FILE, agentNames } from './build.ts'
+import { RULES_FILE, SUBAGENTS_DIR, agentNames } from './build.ts'
 import { PACKAGE_ROOT, VERSION } from './version.ts'
 
 export const TOOL = 'nursery'
@@ -71,7 +71,7 @@ export async function integration(): Promise<agents.AgentIntegration> {
     tool: TOOL,
     version: VERSION,
     description: 'Specialist subagents and shared working rules',
-    subagents: (await agentNames()).map((name) => ({ name, file: path.join(AGENTS_DIR, `${name}.md`) })),
+    subagents: (await agentNames()).map((name) => ({ name, file: path.join(SUBAGENTS_DIR, `${name}.md`) })),
     userSkills: [{ name: 'nursery', dir: path.join(PACKAGE_ROOT, 'skills', 'nursery') }],
     memory: RULES_FILE,
   }
