@@ -13,7 +13,7 @@ const EFFORTS = new Set(['low', 'medium', 'high', 'xhigh', 'max'])
 const DESCRIPTION_MAX = 300
 const DESCRIPTIONS_TOTAL_MAX = 2500
 const BODY_MAX_LINES = 80
-const RULES_MAX_CHARS = 5200
+const RULES_MAX_CHARS = { claude: 5200, codex: 5200, gemini: 5600, opencode: 5200 } as const
 const SKILL_FILE = path.join(import.meta.dirname, '..', 'skills', 'nursery', 'SKILL.md')
 const TOOL_ONLY = ['.claude', 'EnterWorktree', 'ExitWorktree', 'isolation:', 'worktree-agent-']
 const FOREIGN_TERMS = {
@@ -149,7 +149,7 @@ test('the rules block stays inside its budget for every agent', async () => {
   const rules = await readFile(RULES_FILE, 'utf8')
   for (const agent of ['claude', 'opencode', 'codex', 'gemini'] as const) {
     const rendered = agents.renderForAgent(rules, agent)
-    assert.ok(rendered.length <= RULES_MAX_CHARS, `${agent}: ${rendered.length} chars`)
+    assert.ok(rendered.length <= RULES_MAX_CHARS[agent], `${agent}: ${rendered.length} chars`)
     assert.doesNotMatch(rendered, /:::/)
     if (agent === 'claude') assert.match(rendered, /EnterWorktree/)
     else assert.doesNotMatch(rendered, /EnterWorktree|ExitWorktree/)

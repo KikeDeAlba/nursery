@@ -13,6 +13,17 @@ test('the gemini rules make plan mode delegate and close the plan', async () => 
   assert.match(rendered, /exit_plan_mode/)
 })
 
+test('the gemini rules delegate research in parallel and build on the handoff in any mode', async () => {
+  const rendered = agents.renderForAgent(await readFile(RULES_FILE, 'utf8'), 'gemini')
+  const lines = rendered.split('\n').filter((line) => /invoke_agent|entrega|exit_plan_mode|codebase_investigator/.test(line))
+  const research = lines.find((line) => line.includes('invoke_agent'))
+  assert.match(research ?? '', /varias invocaciones en la misma respuesta/)
+  assert.match(research ?? '', /3 preguntas/)
+  assert.ok(lines.some((line) => /entrega/.test(line) && /no releas/.test(line)), 'the handoff is not the base')
+  assert.ok(lines.some((line) => /Tras la entrega, 10 llamadas/.test(line)), 'no call budget after the handoff')
+  for (const line of lines) assert.doesNotMatch(line, /^- En modo plan/, line)
+})
+
 test('the gemini plan mode guidance stays out of the other agents', async () => {
   const rules = await readFile(RULES_FILE, 'utf8')
   for (const agent of ['claude', 'codex', 'opencode'] as const) {
