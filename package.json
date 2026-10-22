@@ -36,6 +36,7 @@
     "dist",
     ".claude-plugin",
     "agents",
+    "subagents",
     "rules",
     "skills",
     "hooks",

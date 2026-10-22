@@ -9,7 +9,8 @@ import { test } from 'node:test'
 import { agents } from '@kikedealba/kit'
 import { assertConformance } from '@kikedealba/kit/conformance'
 import { platformContext } from '@kikedealba/kit/platform'
-import { CAPABILITIES, GEMINI_POLICY_FILE, checkMemory, geminiPolicyPath, findLegacy, installAgents, manifest, removeLegacy, setupTool, uninstallAgents, uninstallTool, LEGACY_HEADING } from '../src/setup.ts'
+import { CAPABILITIES, GEMINI_POLICY_FILE, checkMemory, integration, geminiPolicyPath, findLegacy, installAgents, manifest, removeLegacy, setupTool, uninstallAgents, uninstallTool, LEGACY_HEADING } from '../src/setup.ts'
+import { SUBAGENTS_DIR } from '../src/build.ts'
 import { VERSION } from '../src/version.ts'
 
 const BIN = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'src', 'bin', 'nursery.ts')
@@ -66,6 +67,8 @@ test('a clean install writes rules and subagents for every agent, and a second r
   assert.match(await readFile(path.join(homes.opencode, 'agents', 'developer.md'), 'utf8'), /mode: subagent/)
   assert.match(await readFile(path.join(homes.codex, 'agents', 'security.toml'), 'utf8'), /model_reasoning_effort = "high"/)
   assert.match(await readFile(path.join(homes.gemini, 'extensions', 'nursery', 'agents', 'code-reviewer.md'), 'utf8'), /kind: local/)
+  assert.match(await readFile(path.join(homes.gemini, 'extensions', 'nursery', 'agents', 'researcher.md'), 'utf8'), /^max_turns: 60$/m)
+  assert.match(await readFile(path.join(homes.opencode, 'agents', 'researcher.md'), 'utf8'), /^steps: 30$/m)
   assert.ok(existsSync(path.join(homes.codex, 'prompts', 'nursery.md')))
 
   assert.ok((await checkMemory('all', options)).every((report) => report.state === 'current'))
@@ -75,6 +78,12 @@ test('a clean install writes rules and subagents for every agent, and a second r
   await uninstallAgents(options)
   assert.equal(await readFile(path.join(homes.claude, 'CLAUDE.md'), 'utf8'), '')
   assert.ok(!existsSync(path.join(homes.opencode, 'agents', 'developer.md')))
+})
+
+test('the other tools install the portable subagents', async () => {
+  const subagents = (await integration()).subagents ?? []
+  assert.equal(subagents.length, 10)
+  for (const subagent of subagents) assert.equal(subagent.file, path.join(SUBAGENTS_DIR, `${subagent.name}.md`))
 })
 
 test('unmarked rules block the memory block until --replace-legacy', async (t) => {

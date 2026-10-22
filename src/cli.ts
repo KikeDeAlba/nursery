@@ -3,7 +3,7 @@ import path from 'node:path'
 import { parseArgs } from 'node:util'
 import { agents } from '@kikedealba/kit'
 import { ENVELOPE_VERSION, errorEnvelope, successEnvelope, writeJson } from '@kikedealba/kit/envelope'
-import { agentNames, buildAgents, staleAgents, writeAgents, AGENTS_DIR } from './build.ts'
+import { agentNames, buildAgents, staleAgents, writeAgents, AGENTS_DIR, SUBAGENTS_DIR } from './build.ts'
 import { CAPABILITIES, TOOL, checkMemory, setupTool, uninstallTool, type AgentSelection } from './setup.ts'
 import { SCHEMA_VERSION, VERSION } from './version.ts'
 
@@ -97,7 +97,7 @@ async function build(argv: string[]): Promise<number> {
     return stale.length > 0 ? 1 : 0
   }
   await writeAgents(built)
-  out(`- ${built.length} agents written to ${AGENTS_DIR}`)
+  out(`- ${built.length} agents written to ${AGENTS_DIR} and ${SUBAGENTS_DIR}`)
   return 0
 }
 

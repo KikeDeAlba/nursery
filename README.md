@@ -117,6 +117,11 @@ En modo plan los subagentes de nursery no tienen shell: solo herramientas de
 lectura, búsqueda y web; el resto de su trabajo lo hacen fuera del modo plan.
 Para planear conviene el modelo `auto`: con él, `general.plan.modelRouting`
 planea con Pro y ejecuta con Flash; con un modelo fijo no hay ese cambio.
+Los agentes tienen variantes por herramienta: `subagents/*.md` (generado)
+conserva los bloques `::: agent` y es lo que instalan opencode, Codex y Gemini,
+cada uno con su parte. En Gemini un turno es una respuesta del modelo, así que
+el `researcher` tiene 60 turnos en vez de 30 y una guía para lanzar juntas las
+llamadas independientes y entregar a tiempo.
 Si ya había una política distinta, `nursery setup` la respalda en
 `nursery.toml.bak` antes de reemplazarla. `nursery uninstall` quita la política
 solo si no se editó; si se editó, la deja y lo avisa.
@@ -239,8 +244,10 @@ Los agentes se escriben en `src/agents/*.md`. Los fragmentos compartidos de
 | `branch` | Rama asignada y entrega como parte de una tarea en paralelo | developer, devops, qa-automation |
 | `handoff` | Formato de la entrega | todos |
 
-`pnpm build:agents` genera `agents/*.md`, que va versionado porque el
-marketplace instala desde git.
+`pnpm build:agents` (`nursery build`) genera `agents/*.md`, la variante de
+Claude Code, y `subagents/*.md`, la portable con los bloques `::: agent` que
+instalan las demás herramientas. Los dos van versionados porque el marketplace
+instala desde git.
 
 ```sh
 pnpm install
@@ -251,11 +258,11 @@ pnpm test
 
 Las pruebas fallan si:
 
-- `agents/` no coincide con sus fuentes;
+- `agents/` o `subagents/` no coinciden con sus fuentes;
 - una descripción pasa de 300 caracteres, o todas juntas pasan de 2,500;
 - dos agentes comparten una frase disparadora;
 - un cuerpo pasa de 80 líneas o repite texto de `rules/RULES.md`;
-- el bloque de reglas pasa de 5,200 caracteres, o su sección «Delegación» no nombra
+- el bloque de reglas pasa de 5,200 caracteres (5,600 en Gemini), o su sección «Delegación» no nombra
   a los diez agentes;
 - developer, devops o qa-automation no saben entregar como parte (sin push ni MR).
 
