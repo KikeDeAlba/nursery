@@ -39,6 +39,7 @@
     "subagents",
     "rules",
     "skills",
+    "gemini",
     "hooks",
     "!hooks/*.test.ts",
     "types",

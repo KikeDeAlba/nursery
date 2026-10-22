@@ -73,7 +73,12 @@ Hay varias sesiones a la vez sobre el mismo repo; el worktree evita que se pisen
 
 ## Delegación
 - Todo plan termina con una tabla de pasos: agente de nursery (researcher, analyst, architect, developer, qa-automation, devops, sre, security, code-reviewer, documenter), qué hace, de qué paso depende y qué toca (repo, módulo o archivos).
+::: agent !gemini
 - Todo plan que no sea trivial empieza con `researcher` (también en modo plan: es de solo lectura) y el diseño parte de su entrega.
+:::
+::: agent gemini
+- Todo plan que no sea trivial empieza con `researcher` y el diseño parte de su entrega.
+:::
 - Divide las tareas completas en partes independientes. Las que no dependen entre sí ni tocan los mismos archivos corren en paralelo (máximo 10 agentes a la vez), incluso del mismo rol: dos developer en módulos distintos, o developer y devops en repos distintos. Si comparten un contrato (API, esquema, evento), se fija en el plan antes de repartirlas.
 - Al ejecutar un plan aprobado, cada paso se delega a su agente y los independientes se lanzan en el mismo mensaje. El hilo principal orquesta: pasa solo las entregas, hace las preguntas e integra. Sin delegar solo lo trivial (una línea, un comando).
 ::: agent claude
@@ -82,12 +87,5 @@ Hay varias sesiones a la vez sobre el mismo repo; el worktree evita que se pisen
 :::
 ::: agent !claude
 - Cada parte en paralelo del mismo repo trabaja en su propio worktree y sub-rama; las sub-ramas son solo locales: se integran en la rama de la tarea y se borran con su worktree; al remoto solo sube la rama principal ya lista.
-:::
-::: agent gemini
-- Para investigar, `invoke_agent` a `researcher` con 3 preguntas concretas como máximo por invocación; las preguntas independientes van en varias invocaciones en la misma respuesta. En modo plan, si la política lo niega, `codebase_investigator`.
-- Toma su entrega como base: no releas lo que ya reportó; si falta algo, vuelve a invocarlo con la pregunta puntual.
-- Tras la entrega, 10 llamadas propias como máximo antes de presentar el plan, con los huecos como dudas abiertas; en modo plan, ciérralo con `exit_plan_mode`.
-- En modo plan los subagentes no tienen shell: solo lectura, búsqueda y web.
-- Búsquedas independientes juntas en la misma respuesta, archivos completos y modelo `auto`: Pro planea y Flash ejecuta.
 :::
 - Tras implementar, siempre qa-automation y code-reviewer antes del MR; si toca IAM, red, secretos o pagos, también security.
