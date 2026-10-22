@@ -38,7 +38,7 @@ nursery setup
 | Claude Code | plugin `nursery` | `~/.claude/CLAUDE.md` |
 | opencode | `~/.config/opencode/agents/*.md` | `~/.config/opencode/AGENTS.md` |
 | Codex | `~/.codex/agents/*.toml` | `~/.codex/AGENTS.md` |
-| Gemini CLI | extensión `nursery`, `agents/*.md` | `~/.gemini/GEMINI.md` |
+| Gemini CLI | extensión `nursery`, `agents/*.md`, y política `~/.gemini/policies/nursery.toml` para el modo plan | `~/.gemini/GEMINI.md` |
 
 El bloque de reglas va entre `<!-- kit:nursery:begin -->` y
 `<!-- kit:nursery:end -->`; el resto del archivo no se toca. Si el archivo ya
@@ -108,6 +108,15 @@ vuelve a la conversación principal sea corto. `maxTurns` corta los bucles.
 En opencode, Codex y Gemini, `model` no se traduce y se hereda el de la sesión;
 `effort` pasa a `model_reasoning_effort` en Codex, y `tools` a permisos o
 nombres de herramienta en cada uno.
+
+El modo plan de Gemini CLI solo deja usar sus propios subagentes, y una
+extensión no puede habilitar otros. Por eso `nursery setup` instala la política
+de usuario `~/.gemini/policies/nursery.toml`, que permite en modo plan a
+`researcher`, `analyst`, `architect`, `security`, `code-reviewer` y `sre`.
+Dentro de plan, `researcher` solo puede correr git de lectura y `npm view`.
+Para planear conviene el modelo `auto`: con él, `general.plan.modelRouting`
+planea con Pro y ejecuta con Flash; con un modelo fijo no hay ese cambio.
+`nursery uninstall` quita la política.
 
 ## Delegación automática
 
