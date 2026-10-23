@@ -7,6 +7,8 @@ disable-model-invocation: true
 
 Lleva `$ARGUMENTS` de punta a punta con los subagentes de nursery. Tú orquestas: no haces el trabajo de ningún rol, y entre un agente y otro pasas solo su entrega (resultado, cambios, evidencia, pendiente), nunca su salida completa.
 
+Si aquí arriba no aparece una tarea concreta, la tarea es lo que el usuario pidió al invocar esta skill; si tampoco queda clara, pregúntala antes de llamar a nadie.
+
 ## 1. Elige la cadena
 
 | Tipo | Cadena |
