@@ -9,8 +9,8 @@
 ::: agent codex
 - **Cero rastro de IA** en commits, MR/PR, ramas, comentarios de revisión y tags: sin `Co-Authored-By`, sin "Generated with"/"asistido por", sin mencionar Codex, OpenAI ni el modelo. El autor es quien firma.
 :::
-::: agent gemini
-- **Cero rastro de IA** en commits, MR/PR, ramas, comentarios de revisión y tags: sin `Co-Authored-By`, sin "Generated with"/"asistido por", sin mencionar Gemini, Google ni el modelo. El autor es quien firma.
+::: agent gemini antigravity
+- **Cero rastro de IA** en commits, MR/PR, ramas, comentarios de revisión y tags: sin `Co-Authored-By`, sin "Generated with"/"asistido por", sin mencionar Antigravity, Gemini, Google ni el modelo. El autor es quien firma.
 :::
 ::: agent opencode
 - **Cero rastro de IA** en commits, MR/PR, ramas, comentarios de revisión y tags: sin `Co-Authored-By`, sin "Generated with"/"asistido por", sin mencionar opencode, el proveedor ni el modelo. El autor es quien firma.
@@ -73,10 +73,10 @@ Hay varias sesiones a la vez sobre el mismo repo; el worktree evita que se pisen
 
 ## Delegación
 - Todo plan termina con una tabla de pasos: agente de nursery (researcher, analyst, architect, developer, qa-automation, devops, sre, security, code-reviewer, documenter), qué hace, de qué paso depende y qué toca (repo, módulo o archivos).
-::: agent !gemini
+::: agent !gemini !antigravity
 - Todo plan que no sea trivial empieza con `researcher` (también en modo plan: es de solo lectura) y el diseño parte de su entrega.
 :::
-::: agent gemini
+::: agent gemini antigravity
 - Todo plan que no sea trivial empieza con `researcher` y el diseño parte de su entrega.
 :::
 - Divide las tareas completas en partes independientes. Las que no dependen entre sí ni tocan los mismos archivos corren en paralelo (máximo 10 agentes a la vez), incluso del mismo rol: dos developer en módulos distintos, o developer y devops en repos distintos. Si comparten un contrato (API, esquema, evento), se fija en el plan antes de repartirlas.
