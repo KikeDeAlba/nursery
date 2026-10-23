@@ -59,7 +59,7 @@
     "nursery": "node src/bin/nursery.ts"
   },
   "dependencies": {
-    "@kikedealba/kit": "^0.6.0"
+    "@kikedealba/kit": "^0.6.1"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",

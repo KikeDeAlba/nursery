@@ -387,6 +387,9 @@ test('setup for antigravity installs the plugin through agy, and a second run ch
   const names = (await integration()).subagents?.map((subagent) => subagent.name) ?? []
   assert.equal(names.length, 10)
   assert.deepEqual((await readdir(path.join(plugin, 'agents'))).sort(), names.map((name) => `${name}.md`).sort())
+  const developer = await readFile(path.join(plugin, 'agents', 'developer.md'), 'utf8')
+  const developerTools = (/^tools: \[(.*)\]$/m.exec(developer)?.[1] ?? '').split(',').map((tool) => tool.trim())
+  for (const tool of ['write_to_file', 'run_command', 'replace_file_content', 'view_file']) assert.ok(developerTools.includes(tool), `developer lacks ${tool}`)
   assert.match(await readFile(path.join(plugin, 'skills', 'nursery', 'SKILL.md'), 'utf8'), /^---\nname: nursery\n/)
   const rules = await readFile(path.join(plugin, 'rules', 'nursery.md'), 'utf8')
   assert.match(rules, /^---\ntrigger: always_on\n---\n/)
