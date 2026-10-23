@@ -448,3 +448,56 @@ test('legacy rules in the shared GEMINI.md are reported once and block both agen
   assert.equal(blockCount(await readFile(file, 'utf8')), 1)
   assert.equal(await readFile(`${file}.legacy-backup`, 'utf8'), LEGACY)
 })
+
+test('without agy on PATH the antigravity plugin is unavailable but the rules block is still written', async (t) => {
+  const { homes, options } = await sandbox(t)
+  const steps = await installAgents(['antigravity'], options)
+  assert.deepEqual(steps.filter((step) => step.item === 'plugin').map((step) => [step.agent, step.state]), [['antigravity', 'unavailable']])
+  assert.deepEqual(steps.filter((step) => step.item === 'memory').map((step) => [step.agent, step.state]), [['antigravity', 'installed']])
+  assert.ok(!existsSync(path.join(homes.antigravity, 'plugins', 'nursery')))
+
+  const removed = await uninstallAgents(options)
+  assert.deepEqual(removed.filter((step) => step.agent === 'antigravity' && step.item === 'plugin').map((step) => step.state), ['unavailable'])
+})
+
+test('a failing agy plugin validate stops the install before agy plugin install runs', async (t) => {
+  const { homes, agy, options } = await antigravitySandbox(t)
+  const exec = async (command: string, args: readonly string[]) => {
+    if (args[0] === 'plugin' && args[1] === 'validate') {
+      agy.calls.push(args.join(' '))
+      throw new Error('invalid plugin')
+    }
+    return agy.exec(command, args)
+  }
+  const steps = await installAgents(['antigravity'], { ...options, exec })
+  const plugin = steps.filter((step) => step.item === 'plugin')
+  assert.deepEqual(plugin.map((step) => [step.agent, step.state]), [['antigravity', 'failed']])
+  assert.match(plugin[0]?.detail ?? '', /validate failed/)
+  assert.ok(agy.calls.some((call) => call.startsWith('plugin validate')))
+  assert.ok(!agy.calls.some((call) => call.startsWith('plugin install')))
+  assert.ok(!existsSync(path.join(homes.antigravity, 'plugins', 'nursery')))
+})
+
+test('uninstall skips the antigravity plugin when it is not installed', async (t) => {
+  const { agy, options } = await antigravitySandbox(t)
+  const steps = await uninstallAgents(options)
+  assert.deepEqual(steps.filter((step) => step.agent === 'antigravity' && step.item === 'plugin').map((step) => step.state), ['skipped'])
+  assert.deepEqual(steps.filter((step) => step.state === 'failed'), [])
+  assert.ok(!agy.calls.some((call) => call.startsWith('plugin uninstall')))
+})
+
+test('gemini is detected by its extensions folder or binary, not by the ~/.gemini folder agy creates', async (t) => {
+  const { homes, options } = await sandbox(t)
+  const detected = async (locate: (command: string) => Promise<string | null> = options.locate) => (await checkMemory('detected', { ...options, locate })).map((report) => report.agent)
+
+  await mkdir(homes.gemini, { recursive: true })
+  assert.deepEqual(await detected(), [])
+
+  await mkdir(homes.antigravity, { recursive: true })
+  assert.deepEqual(await detected(), ['antigravity'])
+
+  assert.deepEqual(await detected(async (command: string) => (command === 'gemini' ? '/bin/gemini' : null)), ['gemini', 'antigravity'])
+
+  await mkdir(path.join(homes.gemini, 'extensions'), { recursive: true })
+  assert.deepEqual(await detected(), ['gemini', 'antigravity'])
+})
