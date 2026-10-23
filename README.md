@@ -35,8 +35,8 @@ nursery setup
 - **Antigravity CLI (`agy`)** recibe el plugin `nursery`, y el bloque de reglas
   en `~/.gemini/GEMINI.md`, que comparte con Gemini CLI.
 
-Gemini CLI está obsoleto: Google lo reemplazó por Antigravity CLI. nursery lo
-mantiene por ahora. Se detecta por el binario `gemini` o por
+Gemini CLI está obsoleto: el 19 de mayo de 2026 Google anunció Antigravity CLI
+como su sucesor. nursery lo mantiene por ahora. Se detecta por el binario `gemini` o por
 `~/.gemini/extensions`; la carpeta `~/.gemini` sola no basta, porque `agy` también
 la crea.
 
@@ -123,6 +123,16 @@ En Antigravity, `tools` se traduce a sus nombres (`view_file`, `grep_search`,
 aplican. Delega con `invoke_subagent`; las partes en paralelo del mismo repo van
 con `Workspace: "branch"`. A diferencia de Gemini CLI, el modo plan de `agy` sí
 permite los subagentes del plugin.
+
+`Workspace: "branch"` crea un worktree en
+`~/.gemini/antigravity-cli/worktrees/<conversación>/subagent-…` con una rama
+propia que parte del HEAD, y `agy` no lo limpia: tras integrar la parte, se
+mezcla su rama en la de la tarea y se borran su worktree y su rama.
+
+En `agy -p` (sin interfaz) las confirmaciones de herramientas se rechazan, así
+que el uso headless necesita reglas `permissions.allow` para las herramientas que
+usan los subagentes, en `~/.gemini/antigravity-cli/settings.json` o donde lo
+documente `agy`. Conviene permitir solo lo necesario.
 
 En opencode, Codex y Gemini, `model` no se traduce y se hereda el de la sesión;
 `effort` pasa a `model_reasoning_effort` en Codex, y `tools` a permisos o
@@ -373,7 +383,7 @@ claude --plugin-dir .
 
 ## Trabajo futuro
 
-Evals con el SDK de Python de Antigravity (`google-antigravity`).
+Evals con el SDK de Antigravity (paquete `google-antigravity`, <https://antigravity.google/docs/sdk/overview/>).
 
 ## Licencia
 
