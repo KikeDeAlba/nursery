@@ -9,8 +9,8 @@ importers:
   .:
     dependencies:
       '@kikedealba/kit':
-        specifier: ^0.5.0
-        version: 0.5.0
+        specifier: ^0.6.1
+        version: 0.6.1
     devDependencies:
       '@types/node':
         specifier: ^24.0.0
@@ -21,8 +21,8 @@ importers:
 
 packages:
 
-  '@kikedealba/kit@0.5.0':
-    resolution: {integrity: sha512-yqHaXaDzWRWyW/6hRsJe+FTyeIFT+kxDP47ensNJB4xf2Wabjl3Q5u7jWrPk9d7qSuD/yyhCOs4Wjmo/do7KXg==}
+  '@kikedealba/kit@0.6.1':
+    resolution: {integrity: sha512-0uuu1AQjwPF2RjicfPXqcyD4yPyAnj1G2OcYD3cqtgVZjlibNb743TqD+4PJOzxxx/121JkB5NAuCv0hYMyURw==}
     engines: {node: '>=24'}
     hasBin: true
 
@@ -39,7 +39,7 @@ packages:
 
 snapshots:
 
-  '@kikedealba/kit@0.5.0': {}
+  '@kikedealba/kit@0.6.1': {}
 
   '@types/node@24.19.2':
     dependencies:

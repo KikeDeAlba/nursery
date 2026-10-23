@@ -1,7 +1,7 @@
 # nursery
 
 Una camada de subagentes especialistas que trabajan con las mismas reglas, en
-Claude Code, opencode, Codex y Gemini CLI.
+Claude Code, opencode, Codex, Antigravity CLI y Gemini CLI (obsoleto).
 
 - **Reglas generales:** git, ramas, worktrees, código, idioma y verificación.
   Viven en `rules/RULES.md` y se instalan una sola vez en la memoria global de
@@ -32,19 +32,32 @@ nursery setup
   propio marketplace, y el bloque de reglas en `~/.claude/CLAUDE.md`.
 - **opencode, Codex y Gemini CLI** reciben los subagentes en su formato, el
   bloque de reglas en su memoria global y `/nursery` como comando.
+- **Antigravity CLI (`agy`)** recibe el plugin `nursery`, y el bloque de reglas
+  en `~/.gemini/GEMINI.md`, que comparte con Gemini CLI.
+
+Gemini CLI está obsoleto: el 19 de mayo de 2026 Google anunció Antigravity CLI
+como su sucesor. nursery lo mantiene por ahora. Se detecta por el binario `gemini` o por
+`~/.gemini/extensions`; la carpeta `~/.gemini` sola no basta, porque `agy` también
+la crea.
 
 | Agente | Subagentes | Reglas |
 |---|---|---|
 | Claude Code | plugin `nursery` | `~/.claude/CLAUDE.md` |
 | opencode | `~/.config/opencode/agents/*.md` | `~/.config/opencode/AGENTS.md` |
 | Codex | `~/.codex/agents/*.toml` | `~/.codex/AGENTS.md` |
-| Gemini CLI | extensión `nursery` (`agents/*.md`, `/nursery` y sus hooks) y política `~/.gemini/policies/nursery.toml` para el modo plan | `~/.gemini/GEMINI.md` |
+| Antigravity CLI | plugin `nursery` instalado con `agy plugin install` (se copia a `~/.gemini/config/plugins/nursery/`; trae los diez agentes, `/nursery` y `rules/nursery.md` con `trigger: always_on`) | bloque compartido en `~/.gemini/GEMINI.md` con Gemini CLI |
+| Gemini CLI (obsoleto) | extensión `nursery` (`agents/*.md`, `/nursery` y sus hooks) y política `~/.gemini/policies/nursery.toml` para el modo plan | `~/.gemini/GEMINI.md` |
 
 El bloque de reglas va entre `<!-- kit:nursery:begin -->` y
 `<!-- kit:nursery:end -->`; el resto del archivo no se toca. Si el archivo ya
 tiene las reglas sin esos marcadores (copiadas a mano antes de nursery), el
 bloque no se escribe para no duplicarlas. `nursery setup --replace-legacy` quita
 esa sección, deja una copia en `<archivo>.legacy-backup` y escribe el bloque.
+
+Gemini CLI y Antigravity CLI escriben el mismo bloque en `~/.gemini/GEMINI.md`,
+así que solo hay uno. `nursery uninstall` lo quita únicamente cuando ninguno de
+los dos sigue instalado. Si `agy` no está en el PATH, el paso del plugin sale
+como no disponible.
 
 `nursery check` dice si el bloque de cada agente está al día, falta o choca con
 reglas sin marcadores. `nursery uninstall` quita el plugin, los subagentes, los
@@ -104,6 +117,22 @@ Ningún subagente precarga skills: las usa (atl, inkwell, gaze, recap) solo
 cuando las necesita. Todos terminan con la misma entrega de máximo 15 líneas
 (resultado, cambios, evidencia, pendiente y siguiente agente), para que lo que
 vuelve a la conversación principal sea corto. `maxTurns` corta los bucles.
+
+En Antigravity, `tools` se traduce a sus nombres (`view_file`, `grep_search`,
+`run_command`…), `model` es siempre `inherit` y `effort` y `maxTurns` no
+aplican. Delega con `invoke_subagent`; las partes en paralelo del mismo repo van
+con `Workspace: "branch"`. A diferencia de Gemini CLI, el modo plan de `agy` sí
+permite los subagentes del plugin.
+
+`Workspace: "branch"` crea un worktree en
+`~/.gemini/antigravity-cli/worktrees/<conversación>/subagent-…` con una rama
+propia que parte del HEAD, y `agy` no lo limpia: tras integrar la parte, se
+mezcla su rama en la de la tarea y se borran su worktree y su rama.
+
+En `agy -p` (sin interfaz) las confirmaciones de herramientas se rechazan, así
+que el uso headless necesita reglas `permissions.allow` para las herramientas que
+usan los subagentes, en `~/.gemini/antigravity-cli/settings.json` o donde lo
+documente `agy`. Conviene permitir solo lo necesario.
 
 En opencode, Codex y Gemini, `model` no se traduce y se hereda el de la sesión;
 `effort` pasa a `model_reasoning_effort` en Codex, y `tools` a permisos o
@@ -321,8 +350,22 @@ Las pruebas fallan si:
 - el bloque de reglas pasa de 5,200 caracteres, o su sección «Delegación» no nombra
   a los diez agentes;
 - developer, devops o qa-automation no saben entregar como parte (sin push ni MR);
+- el render de reglas para Gemini y para Antigravity difiere, o `rules/antigravity.md`
+  pierde su contenido esperado;
 - existe `commands/` en la raíz: Claude Code lo carga entero en el plugin, así
   que el comando de Gemini vive en `gemini/commands/nursery.md`.
+
+El límite de caracteres del bloque de reglas también cubre a Antigravity: comparte
+el bloque con Gemini.
+
+Para validar el plugin de Antigravity sin instalarlo:
+
+```sh
+agy plugin validate <raíz> --strict --json
+```
+
+`nursery setup` ya lo corre sobre el plugin generado antes de instalarlo, y no
+instala si falla.
 
 Para probar el panel de subagentes (`hooks/`):
 
@@ -337,6 +380,10 @@ claude --plugin-dir .
   `pnpm test`, que corre `test/*.spec.ts`; el sufijo distinto evita que
   `claude plugin test` intente cargar las pruebas de node.
 - `claude --plugin-dir .` carga el plugin desde el checkout, sin instalarlo.
+
+## Trabajo futuro
+
+Evals con el SDK de Antigravity (paquete `google-antigravity`, <https://antigravity.google/docs/sdk/overview/>).
 
 ## Licencia
 
