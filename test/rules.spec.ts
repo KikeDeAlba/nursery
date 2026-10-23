@@ -6,11 +6,32 @@ import { test } from 'node:test'
 import { agents } from '@kikedealba/kit'
 
 const RULES_FILE = path.join(import.meta.dirname, '..', 'rules', 'RULES.md')
+const ANTIGRAVITY_FILE = path.join(import.meta.dirname, '..', 'rules', 'antigravity.md')
 const COMMAND_FILE = path.join(import.meta.dirname, '..', 'gemini', 'commands', 'nursery.md')
 
 test('the gemini rules leave plan mode and the nursery flow to /nursery', async () => {
   const rendered = agents.renderForAgent(await readFile(RULES_FILE, 'utf8'), 'gemini')
   assert.doesNotMatch(rendered, /exit_plan_mode|invoke_agent|modo plan/)
+})
+
+test('antigravity reads the same shared rules as gemini', async () => {
+  const rules = await readFile(RULES_FILE, 'utf8')
+  const rendered = agents.renderForAgent(rules, 'antigravity')
+  assert.equal(rendered, agents.renderForAgent(rules, 'gemini'))
+  assert.match(rendered, /sin mencionar Antigravity, Gemini, Google ni el modelo/)
+  assert.doesNotMatch(rendered, /:::/)
+})
+
+test('the antigravity rules delegate through invoke_subagent with isolated branch workspaces', async () => {
+  const text = await readFile(ANTIGRAVITY_FILE, 'utf8')
+  assert.ok(!text.startsWith('---'), 'kit adds the frontmatter')
+  assert.doesNotMatch(text, /:::|<!--/)
+  for (const phrase of [/invoke_subagent/, /TypeName es el nombre del agente/, /misma respuesta/, /máximo 10/, /Workspace: "branch"/, /Workspace: "inherit"/, /modo plan/, /ask_question/]) {
+    assert.match(text, phrase)
+  }
+  for (const term of ['Claude', 'Anthropic', 'Codex', 'OpenAI', 'opencode', 'EnterWorktree', 'isolation:']) {
+    assert.ok(!text.toLowerCase().includes(term.toLowerCase()), `antigravity rules name ${term}`)
+  }
 })
 
 test('the repo root has no commands directory that the claude plugin would load', () => {

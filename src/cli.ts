@@ -11,7 +11,7 @@ import { SCHEMA_VERSION, VERSION } from './version.ts'
 const HELP = `nursery ${VERSION}
 
 Uso:
-  nursery setup [--agents claude,opencode,codex,gemini|all|detected] [--replace-legacy] [--json]
+  nursery setup [--agents claude,opencode,codex,gemini,antigravity|all|detected] [--replace-legacy] [--json]
   nursery uninstall [--json]
   nursery check [--agents ...] [--json]
   nursery list [--json]

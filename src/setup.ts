@@ -14,6 +14,8 @@ export const CLAUDE_PLUGIN: agents.ClaudePluginSpec = { marketplace: 'KikeDeAlba
 
 export const CAPABILITIES = ['agents.subagents', 'agents.rules']
 
+export const ANTIGRAVITY_RULES_FILE = path.join(path.dirname(RULES_FILE), 'antigravity.md')
+
 export const GEMINI_POLICY_FILE = path.join(path.dirname(RULES_FILE), 'gemini-plan.toml')
 
 export const INSTALL_HINT = 'npm install -g @kikedealba/nursery && nursery setup'
@@ -53,9 +55,9 @@ export async function unregister(ctx?: PlatformContext): Promise<boolean> {
 
 export const LEGACY_HEADING = '# Reglas generales (todos los proyectos)'
 
-export type MemoryAgent = Exclude<agents.AgentName, 'claude-desktop'>
+export type MemoryAgent = agents.MemoryAgent
 
-export const MEMORY_AGENTS: readonly MemoryAgent[] = ['claude', 'opencode', 'codex', 'gemini']
+export const MEMORY_AGENTS: readonly MemoryAgent[] = ['claude', 'opencode', 'codex', 'gemini', 'antigravity']
 
 export type AgentSelection = readonly agents.AgentName[] | 'detected' | 'all'
 
@@ -75,6 +77,7 @@ export async function integration(): Promise<agents.AgentIntegration> {
     subagents: (await agentNames(SUBAGENTS_DIR)).map((name) => ({ name, file: path.join(SUBAGENTS_DIR, `${name}.md`) })),
     userSkills: [{ name: 'nursery', dir: path.join(PACKAGE_ROOT, 'skills', 'nursery') }],
     memory: RULES_FILE,
+    antigravity: { rules: ANTIGRAVITY_RULES_FILE },
   }
 }
 
@@ -115,9 +118,7 @@ export async function geminiIntegration(ctx?: PlatformContext): Promise<agents.A
 }
 
 export function memoryPath(agent: MemoryAgent, options: agents.InstallOptions = {}): string {
-  const homes = agents.agentHomes(options.ctx ?? platformContext(), options.homes)
-  const base = { claude: homes.claude, opencode: homes.opencode, codex: homes.codex, gemini: homes.gemini }[agent]
-  return path.join(base, agents.MEMORY_FILES[agent])
+  return agents.memoryFile(agent, agents.agentHomes(options.ctx ?? platformContext(), options.homes))
 }
 
 export function geminiPolicyPath(options: agents.InstallOptions = {}): string {
@@ -164,8 +165,7 @@ export function removeLegacy(text: string): string {
   return joined.length > 0 ? `${joined}\n` : ''
 }
 
-async function handleLegacy(agent: MemoryAgent, options: SetupOptions): Promise<agents.Step | null> {
-  const file = memoryPath(agent, options)
+async function handleLegacy(agent: MemoryAgent, file: string, options: SetupOptions): Promise<agents.Step | null> {
   if (!existsSync(file)) return null
   const text = await readFile(file, 'utf8')
   if (!findLegacy(text)) return null
@@ -200,17 +200,21 @@ export async function installAgents(selection: AgentSelection, options: SetupOpt
   const targets = (await resolveSelection(selection, options)).filter((agent): agent is MemoryAgent => agent !== 'claude-desktop')
   const steps: agents.Step[] = []
   const blocked = new Set<MemoryAgent>()
+  const handled = new Map<string, agents.Step | null>()
   for (const agent of targets) {
-    const legacy = await handleLegacy(agent, options)
+    const file = path.resolve(memoryPath(agent, options))
+    const seen = handled.has(file)
+    const legacy = seen ? (handled.get(file) ?? null) : await handleLegacy(agent, file, options)
+    handled.set(file, legacy)
     if (!legacy) continue
-    steps.push(legacy)
+    if (!seen) steps.push(legacy)
     if (legacy.state === 'skipped') blocked.add(agent)
   }
   if (targets.includes('claude')) {
     steps.push(...(await agents.installClaudePlugin(CLAUDE_PLUGIN, options)))
     if (!blocked.has('claude')) steps.push(...(await agents.installIntegration(memoryIntegration(), { ...options, agents: ['claude'] })))
   }
-  const others = targets.filter((agent) => agent === 'opencode' || agent === 'codex')
+  const others = targets.filter((agent) => agent === 'opencode' || agent === 'codex' || agent === 'antigravity')
   if (others.length > 0) steps.push(...(await installSplit(await integration(), others, blocked, options)))
   if (targets.includes('gemini')) steps.push(...(await installSplit(await geminiIntegration(options.ctx), ['gemini'], blocked, options)))
   if (targets.includes('gemini')) steps.push(await installGeminiPolicy(options))
@@ -221,7 +225,7 @@ export async function uninstallAgents(options: agents.InstallOptions = {}): Prom
   const steps: agents.Step[] = []
   steps.push(...(await agents.uninstallClaudePlugin(CLAUDE_PLUGIN, options)))
   steps.push(...(await agents.uninstallIntegration(memoryIntegration(), { ...options, agents: ['claude'] })))
-  steps.push(...(await agents.uninstallIntegration(await integration(), { ...options, agents: ['opencode', 'codex'] })))
+  steps.push(...(await agents.uninstallIntegration(await integration(), { ...options, agents: ['opencode', 'codex', 'antigravity'] })))
   steps.push(...(await agents.uninstallIntegration(await geminiIntegration(options.ctx), { ...options, agents: ['gemini'] })))
   const policy = await uninstallGeminiPolicy(options)
   if (policy) steps.push(policy)
@@ -264,7 +268,7 @@ export async function checkMemory(selection: AgentSelection, options: agents.Ins
     const file = memoryPath(agent, options)
     const text = existsSync(file) ? await readFile(file, 'utf8') : ''
     const block = agents.memoryBlock(text, TOOL)
-    const expected = agents.renderForAgent(rules, agent).trim()
+    const expected = agents.renderMemory(rules, agent).trim()
     const state: MemoryState = findLegacy(text) ? 'legacy' : block === null ? 'missing' : block === expected ? 'current' : 'stale'
     reports.push({ agent, file, state })
   }

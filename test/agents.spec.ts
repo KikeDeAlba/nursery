@@ -14,20 +14,24 @@ const DESCRIPTION_MAX = 300
 const DESCRIPTIONS_TOTAL_MAX = 2500
 const BODY_MAX_LINES = 80
 const RULES_MAX_CHARS = 5200
+const ANTIGRAVITY_RULES_MAX_CHARS = 1000
 const SKILL_FILE = path.join(import.meta.dirname, '..', 'skills', 'nursery', 'SKILL.md')
+const ANTIGRAVITY_RULES_FILE = path.join(import.meta.dirname, '..', 'rules', 'antigravity.md')
 const TOOL_ONLY = ['.claude', 'EnterWorktree', 'ExitWorktree', 'isolation:', 'worktree-agent-']
 const FOREIGN_TERMS = {
   claude: ['Codex', 'OpenAI', 'Gemini', 'Google', 'opencode'],
   codex: ['Claude', 'Anthropic', 'Gemini', 'Google', 'opencode', ...TOOL_ONLY],
   gemini: ['Claude', 'Anthropic', 'Codex', 'OpenAI', 'opencode', ...TOOL_ONLY],
   opencode: ['Claude', 'Anthropic', 'Codex', 'OpenAI', 'Gemini', 'Google', ...TOOL_ONLY],
+  antigravity: ['Claude', 'Anthropic', 'Codex', 'OpenAI', 'opencode', ...TOOL_ONLY],
 } as const
-const OWN_NAME = { claude: 'Claude', codex: 'Codex', gemini: 'Gemini', opencode: 'opencode' } as const
+const OWN_NAME = { claude: 'Claude', codex: 'Codex', gemini: 'Gemini', opencode: 'opencode', antigravity: 'Antigravity' } as const
 const CONVERTERS = {
   claude: (markdown: string) => agents.parseFrontmatter(agents.renderForAgent(markdown, 'claude')).body,
   codex: agents.subagentForCodex,
   gemini: agents.subagentForGemini,
   opencode: agents.subagentForOpenCode,
+  antigravity: agents.subagentForAntigravity,
 } as const
 
 function assertNoForeignTerms(text: string, agent: keyof typeof FOREIGN_TERMS, label: string): void {
@@ -35,7 +39,7 @@ function assertNoForeignTerms(text: string, agent: keyof typeof FOREIGN_TERMS, l
   for (const term of FOREIGN_TERMS[agent]) assert.ok(!lower.includes(term.toLowerCase()), `${label} for ${agent} mentions ${term}`)
 }
 
-const TOOLS = ['claude', 'codex', 'gemini', 'opencode'] as const
+const TOOLS = ['claude', 'codex', 'gemini', 'opencode', 'antigravity'] as const
 
 async function loadAgents(dir: string = AGENTS_DIR): Promise<{ name: string; text: string; attributes: Record<string, string>; body: string }[]> {
   return Promise.all(
@@ -147,13 +151,20 @@ test('bodies are short, end with the handoff and do not repeat the general rules
 
 test('the rules block stays inside its budget for every agent', async () => {
   const rules = await readFile(RULES_FILE, 'utf8')
-  for (const agent of ['claude', 'opencode', 'codex', 'gemini'] as const) {
+  for (const agent of ['claude', 'opencode', 'codex', 'gemini', 'antigravity'] as const) {
     const rendered = agents.renderForAgent(rules, agent)
     assert.ok(rendered.length <= RULES_MAX_CHARS, `${agent}: ${rendered.length} chars`)
     assert.doesNotMatch(rendered, /:::/)
     if (agent === 'claude') assert.match(rendered, /EnterWorktree/)
     else assert.doesNotMatch(rendered, /EnterWorktree|ExitWorktree/)
   }
+})
+
+test('the antigravity delegation rules stay short and only name their own tool', async () => {
+  const text = await readFile(ANTIGRAVITY_RULES_FILE, 'utf8')
+  assert.ok(text.length <= ANTIGRAVITY_RULES_MAX_CHARS, `rules/antigravity.md: ${text.length} chars`)
+  assertNoForeignTerms(text, 'antigravity', 'antigravity rules')
+  assert.match(text, /\bAntigravity\b/)
 })
 
 test('the rules make the main thread delegate, in parallel when it can', async () => {
