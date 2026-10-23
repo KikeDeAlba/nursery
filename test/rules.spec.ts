@@ -16,8 +16,7 @@ test('the gemini rules leave plan mode and the nursery flow to /nursery', async 
 
 test('antigravity reads the same shared rules as gemini', async () => {
   const rules = await readFile(RULES_FILE, 'utf8')
-  // TODO(kit): drop the cast once @kikedealba/kit 0.6.0 adds antigravity to AgentName
-  const rendered = agents.renderForAgent(rules, 'antigravity' as agents.AgentName)
+  const rendered = agents.renderForAgent(rules, 'antigravity')
   assert.equal(rendered, agents.renderForAgent(rules, 'gemini'))
   assert.match(rendered, /sin mencionar Antigravity, Gemini, Google ni el modelo/)
   assert.doesNotMatch(rendered, /:::/)
