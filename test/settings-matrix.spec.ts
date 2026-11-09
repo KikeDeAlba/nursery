@@ -285,7 +285,6 @@ test('a user agent that is enabled by name survives, and stops being listed once
   await rm(file)
   const after = await renderNursery(ctx)
   assert.deepEqual(after.agents, [])
-  assert.ok(!after.agents.includes('solo'))
   assertClean(await outputs(after), 'deleted-solo')
 })
 
