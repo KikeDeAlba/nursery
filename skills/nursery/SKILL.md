@@ -26,9 +26,9 @@ Si el tipo no es obvio, pregunta con la interfaz de preguntas antes de llamar a 
 ## 2. Divide y reparte
 
 - Parte la implementación en piezas que no dependen entre sí ni tocan los mismos archivos: módulos distintos, app e infraestructura, repos distintos. Si comparten un contrato (API, esquema, evento), fíjalo antes de repartir.
-- Lanza en paralelo, en el mismo mensaje, hasta {{agents.maxParallel}} agentes, aunque sean del mismo rol (dos `developer`, o `developer` y `devops`).
+- Lanza en paralelo, en el mismo mensaje, hasta 10 agentes, aunque sean del mismo rol (dos `developer`, o `developer` y `devops`).
 - **Mismo repo:**
-  - crea la rama de la tarea (`feature/<n>` desde `{{rules.baseBranch}}`) en tu worktree;
+  - crea la rama de la tarea (`feature/<n>` desde `develop`) en tu worktree;
   - lanza cada parte en su propio worktree aislado: si tus subagentes se pueden lanzar ya aislados en un worktree, úsalo; si no, que la parte cree el suyo desde `feature/<n>`;
   - asígnale la sub-rama `feature/<n>-<parte>` y, si va aislada, díselo en el mensaje: «eres una parte aislada; tu cwd es tu worktree»; que empiece con `git switch -C feature/<n>-<parte> feature/<n>` y haga commit ahí;
   - las sub-ramas son solo locales: nunca se suben;

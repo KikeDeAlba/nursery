@@ -1,6 +1,6 @@
 import { platformContext, type PlatformContext } from '@kikedealba/kit/platform'
 import { NURSERY_ROLES, RULE_FLAGS, getSettingEntry, type SettingValue } from '@kikedealba/kit/settings'
-import type { RuleFlag, TemplateConfig } from './templates.ts'
+import { READ_ONLY_ROLES, type RuleFlag, type TemplateConfig } from './templates.ts'
 
 export const OVERRIDE_FIELDS = ['model', 'maxTurns', 'effort'] as const
 
@@ -43,6 +43,7 @@ export async function loadConfig(userAgents: readonly string[], ctx: PlatformCon
     baseBranch: await value('rules.baseBranch', 'develop', ctx),
     rules,
     enabled,
+    readOnly: READ_ONLY_ROLES,
     overrides,
   }
 }

@@ -1,17 +1,22 @@
 import assert from 'node:assert/strict'
+import { spawnSync } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { test } from 'node:test'
 import { agents } from '@kikedealba/kit'
 import { platformContext } from '@kikedealba/kit/platform'
 import { setSetting, userAgentsDir } from '@kikedealba/kit/settings'
 import { AGENTS_DIR } from '../src/build.ts'
-import { applyOverrides, marketplaceDir, renderNursery } from '../src/render.ts'
-import { installAgents } from '../src/setup.ts'
+import { applyOverrides, marketplaceDir, planNursery, renderNursery } from '../src/render.ts'
+import { installAgents, uninstallAgents } from '../src/setup.ts'
+import { READ_ONLY_ROLES } from '../src/templates.ts'
 import { validateUserAgent } from '../src/user-agents.ts'
 import { VERSION } from '../src/version.ts'
+
+const BIN = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'src', 'bin', 'nursery.ts')
 
 async function sandbox(t: { after: (fn: () => Promise<void>) => void }) {
   const home = await mkdtemp(path.join(tmpdir(), 'nursery-render-'))
@@ -242,4 +247,47 @@ test('claude swaps the github marketplace for the local one and installs nursery
   claude.calls.length = 0
   await installAgents(['claude'], { ...options, locate: claude.locate, exec: claude.exec })
   assert.deepEqual(claude.calls.filter((call) => !call.endsWith('--json')), ['plugin marketplace update nursery', 'plugin update nursery@nursery --scope user'])
+})
+
+test('the default read-only roles are the ones whose tools cannot write', async (t) => {
+  const { ctx } = await sandbox(t)
+  const plan = await planNursery(ctx)
+  assert.deepEqual(plan.config.readOnly, READ_ONLY_ROLES)
+})
+
+test('the gemini plan policy allows enabled read-only user agents and drops disabled roles', async (t) => {
+  const { ctx, homes, options } = await sandbox(t)
+  await writeUserAgent(ctx, 'revisor-sql', SQL_AGENT)
+  await writeUserAgent(ctx, 'editor-sql', SQL_AGENT.replace('revisor-sql', 'editor-sql').replace('tools: Read, Grep, Glob, Bash', 'tools: Read, Edit, Write'))
+  await setSetting('agents.enabled', 'researcher,developer,revisor-sql,editor-sql', ctx)
+  const steps = await installAgents(['gemini'], options)
+  assert.deepEqual(steps.filter((step) => step.state === 'failed'), [])
+  const file = path.join(homes.gemini, 'policies', 'nursery.toml')
+  const policy = await readFile(file, 'utf8')
+  assert.match(policy, /\(researcher\|revisor-sql\)/)
+  const pattern = new RegExp(/^argsPattern = '''(.*)'''$/m.exec(policy)?.[1] ?? '')
+  assert.match('\0"agent_name":"revisor-sql"\0', pattern)
+  for (const name of ['editor-sql', 'analyst', 'developer']) assert.doesNotMatch(`\0"agent_name":"${name}"\0`, pattern, name)
+  assert.match(await readFile(path.join(homes.gemini, 'GEMINI.md'), 'utf8'), /revisor-sql/)
+  await uninstallAgents(options)
+  assert.ok(!existsSync(file))
+})
+
+test('nursery list --json shows user agents, disabled roles, overrides and invalid agents', async (t) => {
+  const { ctx } = await sandbox(t)
+  await writeUserAgent(ctx, 'revisor-sql', SQL_AGENT)
+  await writeUserAgent(ctx, 'roto', '---\nname: roto\n---\n')
+  await setSetting('agents.enabled', 'researcher,developer,revisor-sql', ctx)
+  await setSetting('agents.developer.model', 'opus', ctx)
+  const run = spawnSync(process.execPath, [BIN, 'list', '--json'], { encoding: 'utf8', env: { ...process.env, ...ctx.env, PATH: process.env['PATH'] } })
+  assert.equal(run.status, 0, run.stderr)
+  const { data } = JSON.parse(run.stdout) as { data: { agents: { name: string; source: string; enabled: boolean; model: string; readOnly: boolean; file?: string }[]; invalidAgents: { name: string }[] } }
+  const byName = new Map(data.agents.map((agent) => [agent.name, agent]))
+  assert.equal(data.agents.length, 11)
+  assert.deepEqual(byName.get('revisor-sql') && [byName.get('revisor-sql')?.source, byName.get('revisor-sql')?.enabled, byName.get('revisor-sql')?.readOnly], ['user', true, true])
+  assert.equal(byName.get('revisor-sql')?.file, path.join(userAgentsDir(ctx), 'revisor-sql.md'))
+  assert.equal(byName.get('developer')?.model, 'opus')
+  assert.equal(byName.get('sre')?.enabled, false)
+  assert.equal(byName.get('sre')?.source, 'nursery')
+  assert.deepEqual(data.invalidAgents.map((agent) => agent.name), ['roto'])
 })

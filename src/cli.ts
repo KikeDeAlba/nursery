@@ -1,11 +1,10 @@
-import { readFile } from 'node:fs/promises'
-import path from 'node:path'
 import { parseArgs } from 'node:util'
 import { agents } from '@kikedealba/kit'
 import { ENVELOPE_VERSION, errorEnvelope, successEnvelope, writeJson } from '@kikedealba/kit/envelope'
-import { agentNames, buildAgents, staleAgents, writeAgents, AGENTS_DIR, SUBAGENTS_DIR } from './build.ts'
+import { buildAgents, buildTemplates, staleAgents, staleTemplates, writeAgents, writeTemplates, AGENTS_DIR, SUBAGENTS_DIR } from './build.ts'
 import { runGeminiHook } from './hooks/gemini-hook.ts'
 import { refreshProfiles } from './refresh.ts'
+import { planNursery } from './render.ts'
 import { CAPABILITIES, TOOL, checkMemory, setupTool, uninstallTool, type AgentSelection } from './setup.ts'
 import type { InvalidUserAgent } from './user-agents.ts'
 import { SCHEMA_VERSION, VERSION } from './version.ts'
@@ -96,14 +95,23 @@ async function check(argv: string[]): Promise<number> {
 
 async function list(argv: string[]): Promise<number> {
   const { values } = parseArgs({ args: argv, options: { json: { type: 'boolean', default: false } } })
-  const rows = await Promise.all(
-    (await agentNames()).map(async (name) => {
-      const { attributes } = agents.parseFrontmatter(await readFile(path.join(AGENTS_DIR, `${name}.md`), 'utf8'))
-      return { name, model: attributes['model'] ?? 'inherit', effort: attributes['effort'] ?? '', description: attributes['description'] ?? '' }
-    }),
-  )
-  if (values.json) writeJson(successEnvelope(SCHEMA_VERSION, 'list', { agents: rows }))
-  else for (const row of rows) out(`${row.name.padEnd(14)} ${`${row.model}/${row.effort}`.padEnd(24)} ${row.description}`)
+  const plan = await planNursery()
+  const rows = plan.agents.map((agent) => ({
+    name: agent.name,
+    source: agent.source,
+    enabled: agent.enabled,
+    model: agent.model ?? 'inherit',
+    effort: agent.effort ?? '',
+    maxTurns: agent.maxTurns,
+    readOnly: agent.readOnly,
+    description: agent.description,
+    ...(agent.file !== null ? { file: agent.file } : {}),
+  }))
+  if (values.json) writeJson(successEnvelope(SCHEMA_VERSION, 'list', { agents: rows, invalidAgents: plan.invalidAgents }))
+  else {
+    for (const row of rows) out(`${row.enabled ? ' ' : '-'} ${row.name.padEnd(14)} ${`${row.model}/${row.effort}`.padEnd(24)} ${row.source === 'user' ? '[user] ' : ''}${row.description}`)
+    printInvalid(plan.invalidAgents)
+  }
   return 0
 }
 
@@ -118,13 +126,15 @@ function capabilities(argv: string[]): number {
 async function build(argv: string[]): Promise<number> {
   const { values } = parseArgs({ args: argv, options: { check: { type: 'boolean', default: false } } })
   const built = await buildAgents()
-  const stale = await staleAgents(built)
+  const templates = await buildTemplates()
+  const stale = [...(await staleAgents(built)), ...(await staleTemplates(templates))]
   if (values.check) {
     if (stale.length > 0) out(`! out of date: ${stale.join(', ')}. Run: pnpm build:agents`)
     return stale.length > 0 ? 1 : 0
   }
   await writeAgents(built)
-  out(`- ${built.length} agents written to ${AGENTS_DIR} and ${SUBAGENTS_DIR}`)
+  await writeTemplates(templates)
+  out(`- ${built.length} agents written to ${AGENTS_DIR} and ${SUBAGENTS_DIR}; ${templates.length} templates rendered with the defaults`)
   return 0
 }
 

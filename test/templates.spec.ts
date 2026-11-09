@@ -1,14 +1,18 @@
 import assert from 'node:assert/strict'
-import { readFile } from 'node:fs/promises'
+import { spawnSync } from 'node:child_process'
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { test } from 'node:test'
 import { agents } from '@kikedealba/kit'
-import { DEFAULT_TEMPLATE_CONFIG, renderTemplate, type RuleFlag, type TemplateConfig } from '../src/templates.ts'
+import { NURSERY_ROLES } from '@kikedealba/kit/settings'
+import { TEMPLATE_SOURCES, buildTemplates, staleTemplates, writeTemplates } from '../src/build.ts'
+import { DEFAULT_TEMPLATE_CONFIG, READ_ONLY_ROLES, renderTemplate, type RuleFlag, type TemplateConfig } from '../src/templates.ts'
 
 const ROOT = path.join(import.meta.dirname, '..')
-const RULES = path.join(ROOT, 'rules', 'RULES.md')
-const ANTIGRAVITY = path.join(ROOT, 'rules', 'antigravity.md')
-const SKILL = path.join(ROOT, 'skills', 'nursery', 'SKILL.md')
+const RULES = path.join(ROOT, 'src', 'templates', 'RULES.md')
+const ANTIGRAVITY = path.join(ROOT, 'src', 'templates', 'antigravity.md')
+const SKILL = path.join(ROOT, 'src', 'templates', 'SKILL.md')
 const TOOLS = ['claude', 'codex', 'gemini', 'opencode', 'antigravity'] as const
 
 function config(overrides: Partial<TemplateConfig> & { off?: RuleFlag[] } = {}): TemplateConfig {
@@ -93,7 +97,7 @@ test('every rule can be turned off at once and the fixed sections stay', async (
 
 test('unknown rule blocks, unclosed blocks and unknown placeholders fail loudly', () => {
   assert.throws(() => renderTemplate('::: rule bogus\nx\n:::\n'), /unknown rule block "bogus"/)
-  assert.throws(() => renderTemplate('::: rule gitflow\nx\n'), /unclosed rule block/)
+  assert.throws(() => renderTemplate('::: rule gitflow\nx\n'), /unclosed rule or role block/)
   assert.throws(() => renderTemplate('{{agents.bogus}}'), /unknown placeholder/)
   assert.equal(renderTemplate('$ARGUMENTS {{args}}'), '$ARGUMENTS {{args}}')
 })
@@ -102,4 +106,61 @@ test('agent blocks nested in a rule block survive when the rule is on', () => {
   const source = '::: rule noAiTrace\n::: agent claude\nA\n:::\n::: agent !claude\nB\n:::\n:::\nC'
   assert.equal(renderTemplate(source), '::: agent claude\nA\n:::\n::: agent !claude\nB\n:::\nC')
   assert.equal(renderTemplate(source, config({ off: ['noAiTrace'] })), 'C')
+})
+
+test('the committed rules, skill and plan policy are the templates rendered with the defaults', async () => {
+  const built = await buildTemplates()
+  assert.deepEqual(await staleTemplates(built), [])
+  for (const { target, content } of built) assert.doesNotMatch(content, /\{\{|^::: (rule|role)/m, target)
+  assert.equal(built.length, 4)
+})
+
+test('staleTemplates catches a committed file that drifted from its template', async (t) => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'nursery-templates-'))
+  t.after(() => rm(dir, { recursive: true, force: true }))
+  const targets = { rules: path.join(dir, 'RULES.md'), antigravity: path.join(dir, 'antigravity.md'), skill: path.join(dir, 'SKILL.md'), policy: path.join(dir, 'gemini-plan.toml') }
+  const built = await buildTemplates(TEMPLATE_SOURCES, targets)
+  assert.equal((await staleTemplates(built)).length, 4)
+  await writeTemplates(built)
+  assert.deepEqual(await staleTemplates(built), [])
+  await writeFile(targets.skill, 'hasta 10 agentes\n')
+  assert.deepEqual((await staleTemplates(built)).map((file) => path.basename(file)), ['SKILL.md'])
+})
+
+test('nursery build --check passes on the committed tree', () => {
+  const run = spawnSync(process.execPath, [path.join(ROOT, 'src', 'bin', 'nursery.ts'), 'build', '--check'], { encoding: 'utf8' })
+  assert.equal(run.status, 0, run.stdout + run.stderr)
+})
+
+for (const role of NURSERY_ROLES) {
+  test(`with ${role} turned off the rules never name it`, async () => {
+    const enabled = NURSERY_ROLES.filter((name) => name !== role)
+    const custom = config({ enabled, readOnly: READ_ONLY_ROLES })
+    const pattern = new RegExp(`(^|[^a-z-])${role}([^a-z-]|$)`)
+    const rules = renderTemplate(await readFile(RULES, 'utf8'), custom)
+    for (const tool of TOOLS) assert.doesNotMatch(agents.renderForAgent(rules, tool), pattern, tool)
+    assert.doesNotMatch(renderTemplate(await readFile(ANTIGRAVITY, 'utf8'), custom), pattern)
+    assert.doesNotMatch(renderTemplate(await readFile(path.join(ROOT, 'src', 'templates', 'gemini-plan.toml'), 'utf8'), custom), pattern)
+  })
+}
+
+test('the after-implementation rule names only the reviewers that are on', async () => {
+  const source = await readFile(RULES, 'utf8')
+  const line = (enabled: string[]) => renderTemplate(source, config({ enabled })).split('\n').find((text) => text.startsWith('- Tras implementar')) ?? null
+  assert.equal(line([...NURSERY_ROLES]), '- Tras implementar, siempre qa-automation y code-reviewer antes del MR; si toca IAM, red, secretos o pagos, también security.')
+  assert.equal(line(['developer', 'code-reviewer']), '- Tras implementar, siempre code-reviewer antes del MR.')
+  assert.equal(line(['developer', 'qa-automation', 'security']), '- Tras implementar, siempre qa-automation antes del MR; si toca IAM, red, secretos o pagos, también security.')
+  assert.equal(line(['developer', 'security']), '- Tras implementar, si toca IAM, red, secretos o pagos, pasa por security antes del MR.')
+  assert.equal(line(['developer']), null)
+  assert.doesNotMatch(renderTemplate(source, config({ enabled: ['developer'] })), /\n{3,}/)
+})
+
+test('the parallel example and the plan-mode line follow the enabled roles', async () => {
+  const source = await readFile(RULES, 'utf8')
+  assert.match(renderTemplate(source, config({ enabled: ['devops'] })), /incluso del mismo rol: dos devops en repos distintos\./)
+  assert.match(renderTemplate(source, config({ enabled: ['researcher'] })), /incluso del mismo rol\. Si comparten/)
+  const antigravity = renderTemplate(await readFile(ANTIGRAVITY, 'utf8'), config({ enabled: ['developer', 'revisor-sql'], readOnly: ['revisor-sql'] }))
+  assert.match(antigravity, /\(`developer`, `revisor-sql`…\)/)
+  assert.match(antigravity, /Las de solo lectura \(revisor-sql\) van con/)
+  assert.doesNotMatch(antigravity, /modo plan/)
 })

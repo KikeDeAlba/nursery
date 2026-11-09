@@ -5,12 +5,10 @@ import { agents } from '@kikedealba/kit'
 import { platformContext, run, type PlatformContext } from '@kikedealba/kit/platform'
 import { defineManifest, registerTool, stableBin, unregisterTool, type ToolManifest } from '@kikedealba/kit/registry'
 import { NURSERY_ROLES } from '@kikedealba/kit/settings'
-import { RULES_FILE, loadFragments } from './build.ts'
-import { loadConfig } from './config.ts'
+import { RULES_FILE, TEMPLATE_SOURCES } from './build.ts'
 import { HOOK_EVENTS, type HookEventName } from './flow-types.ts'
-import { renderNursery, renderedDir, type RenderedNursery } from './render.ts'
+import { planNursery, renderNursery, renderedDir, type RenderedNursery } from './render.ts'
 import { renderTemplate } from './templates.ts'
-import { loadUserAgents } from './user-agents.ts'
 import { PACKAGE_ROOT, VERSION } from './version.ts'
 
 export const TOOL = 'nursery'
@@ -150,9 +148,9 @@ export function geminiPolicyPath(options: agents.InstallOptions = {}): string {
   return path.join(agents.agentHomes(options.ctx ?? platformContext(), options.homes).gemini, 'policies', 'nursery.toml')
 }
 
-async function installGeminiPolicy(options: agents.InstallOptions): Promise<agents.Step> {
+async function installGeminiPolicy(options: agents.InstallOptions, source: string): Promise<agents.Step> {
   const file = geminiPolicyPath(options)
-  const policy = await readFile(GEMINI_POLICY_FILE, 'utf8')
+  const policy = await readFile(source, 'utf8')
   const current = existsSync(file) ? await readFile(file, 'utf8') : null
   if (current === policy) return { agent: 'gemini', item: 'plan policy', state: 'present', detail: `${file} is up to date`, path: file }
   await mkdir(path.dirname(file), { recursive: true })
@@ -165,8 +163,9 @@ async function installGeminiPolicy(options: agents.InstallOptions): Promise<agen
 async function uninstallGeminiPolicy(options: agents.InstallOptions): Promise<agents.Step | null> {
   const file = geminiPolicyPath(options)
   if (!existsSync(file)) return null
-  const policy = await readFile(GEMINI_POLICY_FILE, 'utf8')
-  if ((await readFile(file, 'utf8')) !== policy) {
+  const rendered = path.join(renderedDir(options.ctx), 'gemini-plan.toml')
+  const known = [await readFile(GEMINI_POLICY_FILE, 'utf8'), ...(existsSync(rendered) ? [await readFile(rendered, 'utf8')] : [])]
+  if (!known.includes(await readFile(file, 'utf8'))) {
     return { agent: 'gemini', item: 'plan policy', state: 'skipped', detail: `${file} differs from the nursery policy; it was left in place`, path: file }
   }
   await rm(file, { force: true })
@@ -299,7 +298,7 @@ export async function installAgents(selection: AgentSelection, options: SetupOpt
     steps.push(...(await pruneSubagents(rendered, others, options)))
   }
   if (targets.includes('gemini')) steps.push(...(await installSplit(await geminiIntegration(rendered, options.ctx), ['gemini'], blocked, options)))
-  if (targets.includes('gemini')) steps.push(await installGeminiPolicy(options))
+  if (targets.includes('gemini')) steps.push(await installGeminiPolicy(options, rendered.policyFile))
   return steps
 }
 
@@ -326,9 +325,8 @@ export async function setupTool(selection: AgentSelection, options: SetupOptions
 }
 
 export async function currentRules(ctx?: PlatformContext): Promise<string> {
-  const users = await loadUserAgents(await loadFragments(), ctx)
-  const config = await loadConfig(users.valid.map((agent) => agent.name), ctx)
-  return renderTemplate(await readFile(RULES_FILE, 'utf8'), config)
+  const { config } = await planNursery(ctx)
+  return renderTemplate(await readFile(TEMPLATE_SOURCES.rules, 'utf8'), config)
 }
 
 export interface UninstallResult {

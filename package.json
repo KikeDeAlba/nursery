@@ -39,6 +39,7 @@
     "agents",
     "subagents",
     "src/conventions",
+    "src/templates",
     "rules",
     "skills",
     "gemini",
