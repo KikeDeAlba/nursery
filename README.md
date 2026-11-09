@@ -83,10 +83,26 @@ y los agentes se crean con
 
 `## Verificación` y `## Contexto del proyecto` no se pueden apagar.
 
-Las fuentes `rules/RULES.md`, `rules/antigravity.md` y `skills/nursery/SKILL.md`
-son plantillas: usan `{{agents.maxParallel}}`, `{{rules.baseBranch}}` y
-`{{agents.enabled}}`, y cada sección opcional va entre `::: rule <clave>` y
-`:::` (pueden contener bloques `::: agent`).
+Las plantillas viven en `src/templates/` (`RULES.md`, `antigravity.md`,
+`SKILL.md` y `gemini-plan.toml`). Usan `{{agents.maxParallel}}`,
+`{{rules.baseBranch}}` y `{{agents.enabled}}`; cada sección opcional va entre
+`::: rule <clave>` y `:::`, y lo que nombra un rol va entre `::: role <rol>` y
+`:::` (`!rol` para cuando está apagado). Ambos pueden contener bloques
+`::: agent`. La regla de «tras implementar», el ejemplo de paralelo y la lista
+de agentes de solo lectura se arman con los roles encendidos, así que un rol
+apagado no aparece en las reglas.
+
+`nursery build` renderiza las plantillas con los valores por defecto en
+`rules/RULES.md`, `rules/antigravity.md`, `skills/nursery/SKILL.md` y
+`rules/gemini-plan.toml`, que son los que se versionan y los que ve quien instala
+el plugin desde GitHub. `nursery build --check` falla si alguno no coincide con su
+plantilla.
+
+La política de Gemini CLI para el modo plan permite los agentes encendidos de
+solo lectura (sin `Edit` ni `Write`), incluidos los de usuario.
+`nursery list [--json]` muestra todos los agentes, de nursery y de usuario, con
+`enabled`, `source`, el modelo y el esfuerzo efectivos, `readOnly` y los
+agentes de usuario inválidos.
 
 Cada `nursery setup` renderiza todo en
 `~/.local/share/kikedealba/nursery/` (o `$XDG_DATA_HOME/kikedealba/nursery/`):
@@ -157,7 +173,7 @@ texto. Con `--json`, un comando desconocido imprime un sobre de error
 
 Sin `nursery setup`, el plugin se instala desde Claude Code (2.1.275 o
 posterior) con lo siguiente, pero así no aplica la configuración (sale con los
-defaults y la skill muestra las plantillas sin renderizar):
+valores por defecto):
 
 ```
 /plugin install nursery --marketplace KikeDeAlba/nursery
@@ -408,8 +424,10 @@ Los agentes se escriben en `src/agents/*.md`. Los fragmentos compartidos de
 
 `pnpm build:agents` (`nursery build`) genera `agents/*.md`, la variante de
 Claude Code, y `subagents/*.md`, la portable con los bloques `::: agent` que
-instalan las demás herramientas. Los dos van versionados porque el marketplace
-instala desde git.
+instalan las demás herramientas. También renderiza `src/templates/` con los
+valores por defecto en `rules/` y `skills/nursery/SKILL.md`. Todo va versionado
+porque el marketplace de GitHub instala desde git; las reglas y la skill se
+editan en `src/templates/`, no en los archivos generados.
 
 ```sh
 pnpm install
@@ -420,7 +438,7 @@ pnpm test
 
 Las pruebas fallan si:
 
-- `agents/` o `subagents/` no coinciden con sus fuentes;
+- `agents/`, `subagents/`, `rules/` o `skills/nursery/SKILL.md` no coinciden con sus fuentes;
 - una descripción pasa de 300 caracteres, o todas juntas pasan de 2,500;
 - dos agentes comparten una frase disparadora;
 - un cuerpo pasa de 80 líneas o repite texto de `rules/RULES.md`;
