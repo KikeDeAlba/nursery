@@ -89,7 +89,8 @@ test('invalid efforts, models and maxTurns are rejected for roles and for user a
   await writeAgent(ctx, 'reviewer.md', agentText('reviewer'))
   for (const role of ['developer', 'reviewer']) {
     for (const bad of ['extreme', 'HIGH', '', ' high', 'high\n']) await assert.rejects(setSetting(`agents.${role}.effort`, bad, ctx), { code: 'INVALID_VALUE' }, `${role} effort ${JSON.stringify(bad)}`)
-    for (const bad of ['GPT 5', 'Opus', 'a\nb', 'opus\n', '', 'a;b', 'a/b', '$(id)', '../x']) await assert.rejects(setSetting(`agents.${role}.model`, bad, ctx), { code: 'INVALID_VALUE' }, `${role} model ${JSON.stringify(bad)}`)
+    for (const bad of ['GPT 5', 'Opus', 'a\nb', 'opus\n', '', 'a;b', '$(id)', '../x']) await assert.rejects(setSetting(`agents.${role}.model`, bad, ctx), { code: 'INVALID_VALUE' }, `${role} model ${JSON.stringify(bad)}`)
+    for (const good of ['a/b', 'openai/gpt-5.6-luna']) assert.equal((await setSetting(`agents.${role}.model`, good, ctx)).value, good, `${role} model ${good}`)
     for (const bad of ['0', '501', '-1', 'abc', '5.5', '1e2']) await assert.rejects(setSetting(`agents.${role}.maxTurns`, bad, ctx), { code: 'INVALID_VALUE' }, `${role} maxTurns ${bad}`)
   }
   await assert.rejects(setSetting('agents.ghost.model', 'opus', ctx), { code: 'UNKNOWN_KEY' })
