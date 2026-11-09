@@ -1,5 +1,5 @@
 import { existsSync } from 'node:fs'
-import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises'
+import { mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { agents } from '@kikedealba/kit'
 import { renderTemplate } from './templates.ts'
@@ -116,6 +116,7 @@ export async function staleAgents(built: readonly BuiltAgent[], agentsDir: strin
 export async function writeAgents(built: readonly BuiltAgent[], agentsDir: string = AGENTS_DIR, subagentsDir: string = SUBAGENTS_DIR): Promise<void> {
   for (const { dir, files } of outputs(built, agentsDir, subagentsDir)) {
     await mkdir(dir, { recursive: true })
+    for (const file of await markdownFiles(dir)) if (!files.has(file)) await rm(path.join(dir, file), { force: true })
     for (const [file, content] of files) await writeFile(path.join(dir, file), content)
   }
 }

@@ -23,7 +23,8 @@ export const DEFAULT_TEMPLATE_CONFIG: TemplateConfig = {
 const BLOCK_OPEN = /^:::\s*(rule|role)\s+(.+?)\s*$/
 const ANY_OPEN = /^:::\s*\S+.*$/
 const CLOSE = /^:::\s*$/
-const PLACEHOLDER = /\{\{\s*((?:agents|rules)\.[A-Za-z0-9.]+)\s*\}\}/g
+const PLACEHOLDER = /\{\{((?:agents|rules)\.[A-Za-z0-9.]+)\}\}/g
+const SPACED_PLACEHOLDER = /\{\{\s+(?:agents|rules)\.[^}]*\}\}|\{\{(?:agents|rules)\.[^}]*\s+\}\}/
 const LINE_PLACEHOLDERS = new Set(['rules.afterImplementation'])
 
 function isRuleFlag(value: string): value is RuleFlag {
@@ -112,13 +113,15 @@ function dropEmptyLinePlaceholders(text: string, config: TemplateConfig): string
   return text
     .split('\n')
     .filter((line) => {
-      const match = /^\{\{\s*([A-Za-z0-9.]+)\s*\}\}$/.exec(line.trim())
+      const match = /^\{\{([A-Za-z0-9.]+)\}\}$/.exec(line.trim())
       return !(match && LINE_PLACEHOLDERS.has(match[1] ?? '') && placeholderValue(match[1] ?? '', config) === '')
     })
     .join('\n')
 }
 
 export function renderTemplate(text: string, config: TemplateConfig = DEFAULT_TEMPLATE_CONFIG): string {
+  const spaced = SPACED_PLACEHOLDER.exec(text)
+  if (spaced) throw new Error(`placeholders cannot contain spaces: ${spaced[0]}`)
   const blocks = dropEmptyLinePlaceholders(applyBlocks(text, config), config)
   return blocks.replace(PLACEHOLDER, (_match, key: string) => placeholderValue(key, config)).replace(/\n{3,}/g, '\n\n')
 }
