@@ -1,13 +1,14 @@
 import { randomBytes } from 'node:crypto'
-import { mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
+import { lstat, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import path from 'node:path'
-import { setTimeout as sleep } from 'node:timers/promises'
+import { withFileLock } from '@kikedealba/kit/atomic'
 import type { FlowState } from './flow-types.ts'
 
 const SESSION_ID = /^[A-Za-z0-9._-]{1,128}$/
 
-const LOCK_RETRY_MS = 20
-const LOCK_OWNER = 'owner'
+const LOCK_TIMEOUT_MS = 4000
+const LOCK_STALE_MS = 2000
+const LEGACY_LOCK_STALE_MS = 10_000
 export const FILE_MODE = 0o600
 export const DIR_MODE = 0o700
 
@@ -72,74 +73,21 @@ export interface LockOptions {
   staleMs?: number
 }
 
-async function lockOwner(lock: string): Promise<string | null> {
-  try {
-    return await readFile(path.join(lock, LOCK_OWNER), 'utf8')
-  } catch {
-    return null
+export function sessionLockPath(file: string): string {
+  return `${file}.session.lock`
+}
+
+async function removeLegacyLocks(file: string): Promise<void> {
+  for (const legacy of [`${file}.lock`, `${file}.lock.break`]) {
+    const info = await lstat(legacy).catch(() => null)
+    if (info?.isDirectory() && Date.now() - info.mtimeMs > LEGACY_LOCK_STALE_MS) await rm(legacy, { recursive: true, force: true }).catch(() => undefined)
   }
 }
 
-async function acquire(lock: string, token: string): Promise<boolean> {
-  try {
-    await mkdir(lock, { mode: DIR_MODE })
-  } catch (error) {
-    if (errorCode(error) === 'EEXIST') return false
-    throw error
-  }
-  try {
-    await writeFile(path.join(lock, LOCK_OWNER), token, { mode: FILE_MODE })
-  } catch (error) {
-    await rm(lock, { recursive: true, force: true })
-    throw error
-  }
-  return true
-}
-
-async function breakStale(lock: string, token: string, staleMs: number): Promise<void> {
-  const grave = `${lock}.${token}.stale`
-  try {
-    await rename(lock, grave)
-  } catch (error) {
-    if (errorCode(error) === 'ENOENT') return
-    throw error
-  }
-  const info = await stat(grave)
-  if (Date.now() - info.mtimeMs <= staleMs) {
-    try {
-      await rename(grave, lock)
-      return
-    } catch {
-      await rm(grave, { recursive: true, force: true })
-      return
-    }
-  }
-  await rm(grave, { recursive: true, force: true })
-}
-
-export async function withSessionLock<T>(file: string, fn: () => Promise<T>, { timeoutMs = 4000, staleMs = 10000 }: LockOptions = {}): Promise<T> {
-  const lock = `${file}.lock`
-  const token = `${process.pid}-${randomBytes(8).toString('hex')}`
+export async function withSessionLock<T>(file: string, fn: () => Promise<T>, { timeoutMs = LOCK_TIMEOUT_MS, staleMs = LOCK_STALE_MS }: LockOptions = {}): Promise<T> {
   await mkdir(path.dirname(file), { recursive: true, mode: DIR_MODE })
-  const started = Date.now()
-  for (;;) {
-    if (await acquire(lock, token)) break
-    try {
-      const info = await stat(lock)
-      if (Date.now() - info.mtimeMs > staleMs) {
-        await breakStale(lock, token, staleMs)
-        continue
-      }
-    } catch (error) {
-      if (errorCode(error) === 'ENOENT') continue
-      throw error
-    }
-    if (Date.now() - started >= timeoutMs) throw new Error(`timed out waiting for ${lock}`)
-    await sleep(LOCK_RETRY_MS)
-  }
-  try {
-    return await fn()
-  } finally {
-    if ((await lockOwner(lock)) === token) await rm(lock, { recursive: true, force: true })
-  }
+  return withFileLock(`${file}.session`, async () => {
+    await removeLegacyLocks(file)
+    return fn()
+  }, { timeoutMs, staleMs })
 }

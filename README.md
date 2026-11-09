@@ -28,8 +28,9 @@ nursery setup
 `nursery setup` conecta nursery con los agentes que encuentre
 (`--agents claude,codex` elige cuáles, `--agents all` los fuerza todos):
 
-- **Claude Code** recibe el plugin `nursery` de este repositorio, que es su
-  propio marketplace, y el bloque de reglas en `~/.claude/CLAUDE.md`.
+- **Claude Code** recibe el plugin `nursery` desde un marketplace local que
+  nursery arma con tu configuración (ver «Configuración»), y el bloque de
+  reglas en `~/.claude/CLAUDE.md`.
 - **opencode, Codex y Gemini CLI** reciben los subagentes en su formato, el
   bloque de reglas en su memoria global y `/nursery` como comando.
 - **Antigravity CLI (`agy`)** recibe el plugin `nursery`, y el bloque de reglas
@@ -63,6 +64,97 @@ como no disponible.
 reglas sin marcadores. `nursery uninstall` quita el plugin, los subagentes, los
 bloques y el registro en kit.
 
+## Configuración
+
+nursery arma los agentes y las reglas a partir de `settings.json` de kit
+(`~/.config/kikedealba/settings.json`, o `$KIT_CONFIG_DIR/settings.json`) y de
+los agentes de usuario de `~/.config/kikedealba/agents/`. No se edita a mano:
+se cambia con [`den config`](https://github.com/KikeDeAlba/den-cli#den-config)
+y los agentes se crean con
+[`den agent new`](https://github.com/KikeDeAlba/den-cli#den-agent).
+
+| Clave | Default | Efecto |
+|---|---|---|
+| `agents.maxParallel` | `10` | Tope de agentes en paralelo en las reglas, en la de Antigravity y en `/nursery` |
+| `agents.enabled` | los diez roles y los agentes de usuario | Qué agentes se instalan y cuáles aparecen en `## Delegación` |
+| `agents.<rol>.model` / `maxTurns` / `effort` | lo que diga el frontmatter | Sobrescribe el frontmatter del agente |
+| `rules.noAiTrace` / `gitflow` / `worktrees` / `noComments` / `language` / `delegation` | `true` | Incluye u omite su sección de las reglas |
+| `rules.baseBranch` | `develop` | Rama base en `## Ramas`, `## Worktrees` y `/nursery` |
+
+`## Verificación` y `## Contexto del proyecto` no se pueden apagar.
+
+Las plantillas viven en `src/templates/` (`RULES.md`, `antigravity.md`,
+`SKILL.md` y `gemini-plan.toml`). Usan `{{agents.maxParallel}}`,
+`{{rules.baseBranch}}` y `{{agents.enabled}}`; cada sección opcional va entre
+`::: rule <clave>` y `:::`, y lo que nombra un rol va entre `::: role <rol>` y
+`:::` (`!rol` para cuando está apagado). Ambos pueden contener bloques
+`::: agent`. La regla de «tras implementar», el ejemplo de paralelo y la lista
+de agentes de solo lectura se arman con los roles encendidos, así que un rol
+apagado no aparece en las reglas.
+
+`nursery build` renderiza las plantillas con los valores por defecto en
+`rules/RULES.md`, `rules/antigravity.md`, `skills/nursery/SKILL.md` y
+`rules/gemini-plan.toml`, que son los que se versionan y los que ve quien instala
+el plugin desde GitHub. `nursery build --check` falla si alguno no coincide con su
+plantilla.
+
+La política de Gemini CLI para el modo plan permite los agentes encendidos de
+solo lectura (sin `Edit` ni `Write`), incluidos los de usuario.
+`nursery list [--json]` muestra todos los agentes, de nursery y de usuario, con
+`enabled`, `source`, el modelo y el esfuerzo efectivos, `readOnly` y los
+agentes de usuario inválidos.
+
+Cada `nursery setup` renderiza todo en
+`~/.local/share/kikedealba/nursery/` (o `$XDG_DATA_HOME/kikedealba/nursery/`):
+
+- `marketplace/` es el marketplace local de Claude Code (`name: "nursery"`). El
+  plugin lleva la versión del paquete más un hash del contenido
+  (`0.8.0+3f2a…`), así que `claude plugin update` aplica cada cambio de
+  configuración. Si `nursery` estaba agregado desde GitHub, setup lo quita
+  (`claude plugin marketplace remove nursery`) y agrega el local; el id sigue
+  siendo `nursery@nursery`.
+- `rendered/` tiene las reglas, la skill y los subagentes en formato neutral que
+  reciben opencode, Codex, Gemini CLI y Antigravity CLI.
+
+Un agente que se apaga (o un agente de usuario que se borra) desaparece del
+plugin y de las carpetas de opencode y Codex en el siguiente setup. Si una clave
+no tiene equivalente en un harness (`model` en opencode, Codex, Gemini y
+Antigravity; `effort` en opencode, Gemini y Antigravity; `maxTurns` en Codex y
+Antigravity), el paso sale como `skipped` con el detalle.
+
+### Agentes de usuario
+
+`~/.config/kikedealba/agents/<nombre>.md` usa el mismo formato que
+`src/agents/*.md` (frontmatter, `::: agent <harness>` y `@include <convención>`)
+y se instala como un rol más. Se valida antes de instalarlo; uno inválido no se
+instala y se reporta con todos sus fallos (`invalidAgents` en `--json`):
+
+- `name` cumple `^[a-z][a-z0-9-]{1,39}$`, es igual al nombre del archivo y no es
+  uno de los diez roles;
+- `description` es obligatoria y tiene 300 caracteres o menos;
+- `tools` sale de `Read, Grep, Glob, Bash, Edit, Write, Skill, WebFetch, WebSearch`;
+- `model`, `effort` y `maxTurns` son opcionales y siguen las reglas de settings;
+- el cuerpo no está vacío.
+
+Los campos `source` y `createdAt` que escribe `den agent new` no llegan al
+agente instalado. `agents.<nombre>.*` en settings gana sobre su frontmatter.
+
+### Perfiles y `--refresh`
+
+```sh
+nursery setup --refresh [--agents claude,codex,...] [--profile <nombre>] [--json]
+```
+
+Vuelve a renderizar e instala en cada perfil de `profiles.json` de kit, con el
+entorno de ese perfil (`CLAUDE_CONFIG_DIR` y `CODEX_HOME` propios). opencode,
+Gemini CLI y Antigravity CLI solo se tocan en la pasada del perfil builtin,
+porque tienen una sola cuenta. `--profile` limita la pasada a un perfil. Es lo
+que corre den tras `den config set agents.*|rules.*` y `den agent new`; con
+`--json` responde un solo sobre de kit con
+`{ refresh, marketplace, version, agents, userAgents, invalidAgents, profiles: [{ profile, builtin, agents, steps }] }`.
+Sale con 1 si algún paso falló y con 2 si `settings.json` está corrupto
+(`SETTINGS_INVALID`) o el perfil no existe (`PROFILE_NOT_FOUND`).
+
 ### Registro en kit
 
 Antes de instalar en los agentes, `nursery setup` registra nursery en el
@@ -80,7 +172,8 @@ texto. Con `--json`, un comando desconocido imprime un sobre de error
 ### El plugin de Claude Code
 
 Sin `nursery setup`, el plugin se instala desde Claude Code (2.1.275 o
-posterior) con:
+posterior) con lo siguiente, pero así no aplica la configuración (sale con los
+valores por defecto):
 
 ```
 /plugin install nursery --marketplace KikeDeAlba/nursery
@@ -331,8 +424,10 @@ Los agentes se escriben en `src/agents/*.md`. Los fragmentos compartidos de
 
 `pnpm build:agents` (`nursery build`) genera `agents/*.md`, la variante de
 Claude Code, y `subagents/*.md`, la portable con los bloques `::: agent` que
-instalan las demás herramientas. Los dos van versionados porque el marketplace
-instala desde git.
+instalan las demás herramientas. También renderiza `src/templates/` con los
+valores por defecto en `rules/` y `skills/nursery/SKILL.md`. Todo va versionado
+porque el marketplace de GitHub instala desde git; las reglas y la skill se
+editan en `src/templates/`, no en los archivos generados.
 
 ```sh
 pnpm install
@@ -343,7 +438,7 @@ pnpm test
 
 Las pruebas fallan si:
 
-- `agents/` o `subagents/` no coinciden con sus fuentes;
+- `agents/`, `subagents/`, `rules/` o `skills/nursery/SKILL.md` no coinciden con sus fuentes;
 - una descripción pasa de 300 caracteres, o todas juntas pasan de 2,500;
 - dos agentes comparten una frase disparadora;
 - un cuerpo pasa de 80 líneas o repite texto de `rules/RULES.md`;

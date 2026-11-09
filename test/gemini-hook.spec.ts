@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { test } from 'node:test'
-import { flowDir, saveState, statePath } from '../src/flow-store.ts'
+import { flowDir, saveState, sessionLockPath, statePath, withSessionLock } from '../src/flow-store.ts'
 import type { FlowState } from '../src/flow-types.ts'
 import { runGeminiHook, type GeminiHookDeps } from '../src/hooks/gemini-hook.ts'
 
@@ -117,7 +117,7 @@ test('a finished flow keeps its state untouched and releases the lock', async (t
   const before = await readFile(file, 'utf8')
   assert.deepEqual(await runGeminiHook('BeforeTool', JSON.stringify({ session_id: 's1', cwd: root, tool_name: 'write_file', tool_input: { file_path: 'a.ts' } }), deps), {})
   assert.equal(await readFile(file, 'utf8'), before)
-  assert.ok(!existsSync(`${file}.lock`))
+  assert.ok(!existsSync(sessionLockPath(file)))
 })
 
 test('the gemini-hook subcommand always exits 0 with one json line on stdout', async (t) => {
@@ -203,14 +203,27 @@ test('a state whose plan path leaves the plans directory is treated as unreadabl
   assert.deepEqual(await runGeminiHook('BeforeTool', tool(root, 'read_file'), deps), {})
 })
 
-test('a lock that is never released fails closed for risky tools', async (t) => {
+test('a lock held by a live owner fails closed for risky tools', async (t) => {
   const { root, geminiHome, deps } = await sandbox(t)
   const file = statePath(flowDir(geminiHome), 's1')
   await saveState(file, activeState(root))
-  await mkdir(`${file}.lock`)
-  const result = await quietly(() => runGeminiHook('BeforeTool', tool(root, 'write_file', { file_path: 'a.ts' }), deps))
-  assert.deepEqual(result.value, UNREADABLE)
-  assert.match(result.stderr, /timed out/)
+  let release = () => {}
+  let held = () => {}
+  const holding = new Promise<void>((resolve) => { held = resolve })
+  const holder = withSessionLock(file, () => {
+    held()
+    return new Promise<void>((resolve) => { release = resolve })
+  })
+  await holding
+  try {
+    const result = await quietly(() => runGeminiHook('BeforeTool', tool(root, 'write_file', { file_path: 'a.ts' }), { ...deps, lock: { timeoutMs: 150 } }))
+    assert.deepEqual(result.value, UNREADABLE)
+    assert.match(result.stderr, /timed out/)
+  } finally {
+    release()
+    await holder
+  }
+  assert.ok(!existsSync(sessionLockPath(file)))
 })
 
 test('an active flow denies unknown tools before acceptance through the adapter', async (t) => {

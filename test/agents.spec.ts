@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { test } from 'node:test'
 import { agents } from '@kikedealba/kit'
+import { renderTemplate } from '../src/templates.ts'
 import { AGENTS_DIR, RULES_FILE, SUBAGENTS_DIR, agentNames, buildAgents, renderAgent, staleAgents, writeAgents } from '../src/build.ts'
 
 const KNOWN_FIELDS = new Set(['name', 'description', 'tools', 'model', 'effort', 'maxTurns'])
@@ -141,7 +142,7 @@ test('trigger phrases are not shared between agents', async () => {
 })
 
 test('bodies are short, end with the handoff and do not repeat the general rules', async () => {
-  const rules = (await readFile(RULES_FILE, 'utf8')).split('\n').map((line) => line.trim()).filter((line) => line.length >= 40)
+  const rules = (renderTemplate(await readFile(RULES_FILE, 'utf8'))).split('\n').map((line) => line.trim()).filter((line) => line.length >= 40)
   for (const agent of (await Promise.all(TOOLS.map(loadRendered))).flat()) {
     assert.ok(agent.body.split('\n').length <= BODY_MAX_LINES, `${agent.name}: body too long`)
     assert.match(agent.body, /## Entrega/)
@@ -150,7 +151,7 @@ test('bodies are short, end with the handoff and do not repeat the general rules
 })
 
 test('the rules block stays inside its budget for every agent', async () => {
-  const rules = await readFile(RULES_FILE, 'utf8')
+  const rules = renderTemplate(await readFile(RULES_FILE, 'utf8'))
   for (const agent of ['claude', 'opencode', 'codex', 'gemini', 'antigravity'] as const) {
     const rendered = agents.renderForAgent(rules, agent)
     assert.ok(rendered.length <= RULES_MAX_CHARS, `${agent}: ${rendered.length} chars`)
@@ -161,14 +162,14 @@ test('the rules block stays inside its budget for every agent', async () => {
 })
 
 test('the antigravity delegation rules stay short and only name their own tool', async () => {
-  const text = await readFile(ANTIGRAVITY_RULES_FILE, 'utf8')
+  const text = renderTemplate(await readFile(ANTIGRAVITY_RULES_FILE, 'utf8'))
   assert.ok(text.length <= ANTIGRAVITY_RULES_MAX_CHARS, `rules/antigravity.md: ${text.length} chars`)
   assertNoForeignTerms(text, 'antigravity', 'antigravity rules')
   assert.match(text, /\bAntigravity\b/)
 })
 
 test('the rules make the main thread delegate, in parallel when it can', async () => {
-  const rendered = agents.renderForAgent(await readFile(RULES_FILE, 'utf8'), 'claude')
+  const rendered = agents.renderForAgent(renderTemplate(await readFile(RULES_FILE, 'utf8')), 'claude')
   const section = rendered.slice(rendered.indexOf('## Delegación'))
   assert.ok(section.length > '## Delegación'.length)
   for (const name of await agentNames()) assert.match(section, new RegExp(`\\b${name}\\b`), `${name} missing from the delegation rules`)
@@ -181,7 +182,7 @@ test('the researcher is read-only and starts the planned chains', async () => {
   const tools = (researcher?.attributes['tools'] ?? '').split(',').map((item) => item.trim())
   assert.ok(tools.length > 1)
   for (const tool of ['Write', 'Edit']) assert.ok(!tools.includes(tool), `researcher has ${tool}`)
-  const skill = await readFile(SKILL_FILE, 'utf8')
+  const skill = renderTemplate(await readFile(SKILL_FILE, 'utf8'))
   for (const chain of ['Feature o historia', 'Infraestructura o pipeline', 'Incidente']) {
     const row = skill.split('\n').find((line) => line.startsWith(`| ${chain} |`))
     assert.match(row ?? '', /^\| [^|]+ \| researcher → /, `${chain} does not start with researcher`)
@@ -212,8 +213,8 @@ test('agents that change code know how to work as one part of a parallel task', 
 })
 
 test('parallel parts of one repo run in worktrees the orchestrator creates for them', async () => {
-  const rules = await readFile(RULES_FILE, 'utf8')
-  const skill = await readFile(SKILL_FILE, 'utf8')
+  const rules = renderTemplate(await readFile(RULES_FILE, 'utf8'))
+  const skill = renderTemplate(await readFile(SKILL_FILE, 'utf8'))
   assert.doesNotMatch(skill, /:::/)
   const lower = skill.toLowerCase()
   for (const term of ['Claude', 'Anthropic', 'Codex', 'OpenAI', 'Gemini', 'Google', 'opencode', ...TOOL_ONLY]) assert.ok(!lower.includes(term.toLowerCase()), `skill names ${term}`)
@@ -244,8 +245,8 @@ test('parallel parts of one repo run in worktrees the orchestrator creates for t
 })
 
 test('each agent only sees its own tool in the rules, subagents and skill', async () => {
-  const rules = await readFile(RULES_FILE, 'utf8')
-  const skill = await readFile(SKILL_FILE, 'utf8')
+  const rules = renderTemplate(await readFile(RULES_FILE, 'utf8'))
+  const skill = renderTemplate(await readFile(SKILL_FILE, 'utf8'))
   const loaded = await loadAgents(SUBAGENTS_DIR)
   for (const agent of TOOLS) {
     const rendered = agents.renderForAgent(rules, agent)
