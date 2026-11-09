@@ -3,7 +3,7 @@ import { rm } from 'node:fs/promises'
 import { agents } from '@kikedealba/kit'
 import { platformContext } from '@kikedealba/kit/platform'
 import { failResult, isFlowStart, step } from '../flow.ts'
-import { flowDir, loadState, saveState, statePath, withSessionLock } from '../flow-store.ts'
+import { flowDir, loadState, saveState, statePath, withSessionLock, type LockOptions } from '../flow-store.ts'
 import { HOOK_EVENTS, type FlowEnv, type FlowState, type HookEvent, type HookEventName, type HookResult } from '../flow-types.ts'
 import { applyPlanLog, defaultPlansDir, projectName } from '../plan-log.ts'
 
@@ -11,6 +11,7 @@ export interface GeminiHookDeps {
   env: NodeJS.ProcessEnv
   now: () => Date
   geminiHome: string
+  lock?: LockOptions
 }
 
 function defaultDeps(): GeminiHookDeps {
@@ -87,7 +88,7 @@ export async function runGeminiHook(event: string, raw: string, deps: GeminiHook
       }
       await applyPlanLog(out.log)
       return out.result
-    })
+    }, deps.lock)
   } catch (error) {
     report(error)
     return failResult(current)
