@@ -37,10 +37,14 @@ export async function buildTemplates(sources: Record<keyof typeof TEMPLATE_SOURC
   return built
 }
 
-export async function staleTemplates(built: readonly BuiltTemplate[]): Promise<string[]> {
+export function displayPath(root: string, target: string, platform: path.PlatformPath = path): string {
+  return platform.relative(root, target).split(platform.sep).join('/')
+}
+
+export async function staleTemplates(built: readonly BuiltTemplate[], root: string = PACKAGE_ROOT): Promise<string[]> {
   const stale: string[] = []
   for (const { target, content } of built) {
-    if (!existsSync(target) || (await readFile(target, 'utf8')) !== content) stale.push(path.relative(PACKAGE_ROOT, target))
+    if (!existsSync(target) || (await readFile(target, 'utf8')) !== content) stale.push(displayPath(root, target))
   }
   return stale
 }

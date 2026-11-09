@@ -6,7 +6,7 @@ import path from 'node:path'
 import { test } from 'node:test'
 import { agents } from '@kikedealba/kit'
 import { NURSERY_ROLES } from '@kikedealba/kit/settings'
-import { TEMPLATE_SOURCES, buildTemplates, staleTemplates, writeTemplates } from '../src/build.ts'
+import { TEMPLATE_SOURCES, buildTemplates, displayPath, staleTemplates, writeTemplates } from '../src/build.ts'
 import { DEFAULT_TEMPLATE_CONFIG, READ_ONLY_ROLES, renderTemplate, type RuleFlag, type TemplateConfig } from '../src/templates.ts'
 
 const ROOT = path.join(import.meta.dirname, '..')
@@ -125,6 +125,20 @@ test('staleTemplates catches a committed file that drifted from its template', a
   assert.deepEqual(await staleTemplates(built), [])
   await writeFile(targets.skill, 'hasta 10 agentes\n')
   assert.deepEqual((await staleTemplates(built)).map((file) => path.basename(file)), ['SKILL.md'])
+})
+
+test('staleTemplates names files relative to the root with forward slashes', async (t) => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'nursery-templates-'))
+  t.after(() => rm(dir, { recursive: true, force: true }))
+  const targets = { rules: path.join(dir, 'rules', 'RULES.md'), antigravity: path.join(dir, 'rules', 'antigravity.md'), skill: path.join(dir, 'skills', 'nursery', 'SKILL.md'), policy: path.join(dir, 'rules', 'gemini-plan.toml') }
+  const built = await buildTemplates(TEMPLATE_SOURCES, targets)
+  assert.deepEqual(await staleTemplates(built, dir), ['rules/RULES.md', 'rules/antigravity.md', 'skills/nursery/SKILL.md', 'rules/gemini-plan.toml'])
+})
+
+test('displayPath uses forward slashes for Windows paths too', () => {
+  assert.equal(displayPath('C:\\work\\nursery', 'C:\\work\\nursery\\skills\\nursery\\SKILL.md', path.win32), 'skills/nursery/SKILL.md')
+  assert.equal(displayPath('C:\\work\\nursery', 'C:\\work\\nursery\\rules\\RULES.md', path.win32), 'rules/RULES.md')
+  assert.equal(displayPath('/work/nursery', '/work/nursery/rules/RULES.md', path.posix), 'rules/RULES.md')
 })
 
 test('nursery build --check passes on the committed tree', () => {
