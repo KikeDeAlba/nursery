@@ -182,25 +182,41 @@ test('withSessionLock writes its own token and leaves a lock it no longer owns',
   assert.match(String(other), /timed out/)
 })
 
-test('two waiters on a stale lock break it once and run one at a time', async (t) => {
+test('waiters on a stale lock break it once and run one at a time', async (t) => {
   const dir = await sandbox(t)
   const file = statePath(dir, 's1')
   const lock = `${file}.lock`
-  await mkdir(lock)
-  await writeFile(path.join(lock, 'owner'), 'dead')
+  for (let round = 0; round < 12; round += 1) {
+    await mkdir(lock)
+    await writeFile(path.join(lock, 'owner'), 'dead')
+    const old = new Date(Date.now() - 60_000)
+    await utimes(lock, old, old)
+    let inside = 0
+    let overlap = false
+    let runs = 0
+    const run = () =>
+      withSessionLock(file, async () => {
+        inside += 1
+        runs += 1
+        if (inside > 1) overlap = true
+        await new Promise((resolve) => setTimeout(resolve, 2))
+        inside -= 1
+      }, { timeoutMs: 2000, staleMs: 10_000 })
+    await Promise.all(Array.from({ length: 4 }, run))
+    assert.equal(overlap, false, `round ${round}`)
+    assert.equal(runs, 4, `round ${round}`)
+    assert.deepEqual(await readdir(dir), [], `round ${round}`)
+  }
+})
+
+test('withSessionLock clears a breaker left by a dead process', async (t) => {
+  const dir = await sandbox(t)
+  const file = statePath(dir, 's1')
   const old = new Date(Date.now() - 60_000)
-  await utimes(lock, old, old)
-  let inside = 0
-  let overlap = false
-  const run = () =>
-    withSessionLock(file, async () => {
-      inside += 1
-      if (inside > 1) overlap = true
-      await new Promise((resolve) => setTimeout(resolve, 30))
-      inside -= 1
-    }, { timeoutMs: 1000, staleMs: 10_000 })
-  await Promise.all([run(), run(), run()])
-  assert.equal(overlap, false)
-  assert.ok(!existsSync(lock))
-  assert.deepEqual((await readdir(dir)).filter((name) => name.includes('.stale')), [])
+  for (const leftover of [`${file}.lock`, `${file}.lock.break`]) {
+    await mkdir(leftover)
+    await utimes(leftover, old, old)
+  }
+  assert.equal(await withSessionLock(file, async () => 'ran', { timeoutMs: 500, staleMs: 10_000 }), 'ran')
+  assert.deepEqual(await readdir(dir), [])
 })

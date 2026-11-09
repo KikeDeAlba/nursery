@@ -96,25 +96,30 @@ async function acquire(lock: string, token: string): Promise<boolean> {
   return true
 }
 
-async function breakStale(lock: string, token: string, staleMs: number): Promise<void> {
-  const grave = `${lock}.${token}.stale`
+async function isStale(target: string, staleMs: number): Promise<boolean> {
   try {
-    await rename(lock, grave)
+    return Date.now() - (await stat(target)).mtimeMs > staleMs
   } catch (error) {
-    if (errorCode(error) === 'ENOENT') return
+    if (errorCode(error) === 'ENOENT') return false
     throw error
   }
-  const info = await stat(grave)
-  if (Date.now() - info.mtimeMs <= staleMs) {
-    try {
-      await rename(grave, lock)
-      return
-    } catch {
-      await rm(grave, { recursive: true, force: true })
-      return
-    }
+}
+
+async function breakStale(lock: string, staleMs: number): Promise<boolean> {
+  const breaker = `${lock}.break`
+  try {
+    await mkdir(breaker, { mode: DIR_MODE })
+  } catch (error) {
+    if (errorCode(error) !== 'EEXIST') throw error
+    if (await isStale(breaker, staleMs)) await rm(breaker, { recursive: true, force: true })
+    return false
   }
-  await rm(grave, { recursive: true, force: true })
+  try {
+    if (await isStale(lock, staleMs)) await rm(lock, { recursive: true, force: true })
+  } finally {
+    await rm(breaker, { recursive: true, force: true })
+  }
+  return true
 }
 
 export async function withSessionLock<T>(file: string, fn: () => Promise<T>, { timeoutMs = 4000, staleMs = 10000 }: LockOptions = {}): Promise<T> {
@@ -124,16 +129,7 @@ export async function withSessionLock<T>(file: string, fn: () => Promise<T>, { t
   const started = Date.now()
   for (;;) {
     if (await acquire(lock, token)) break
-    try {
-      const info = await stat(lock)
-      if (Date.now() - info.mtimeMs > staleMs) {
-        await breakStale(lock, token, staleMs)
-        continue
-      }
-    } catch (error) {
-      if (errorCode(error) === 'ENOENT') continue
-      throw error
-    }
+    if ((await isStale(lock, staleMs)) && (await breakStale(lock, staleMs))) continue
     if (Date.now() - started >= timeoutMs) throw new Error(`timed out waiting for ${lock}`)
     await sleep(LOCK_RETRY_MS)
   }
