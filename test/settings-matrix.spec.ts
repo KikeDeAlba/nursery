@@ -9,6 +9,8 @@ import { platformContext } from '@kikedealba/kit/platform'
 import { NURSERY_ROLES, RULE_FLAGS, SettingsError, setSetting, settingsPath, userAgentsDir } from '@kikedealba/kit/settings'
 import { planNursery, renderNursery } from '../src/render.ts'
 import { validateUserAgent } from '../src/user-agents.ts'
+import { TEMPLATE_SOURCES } from '../src/build.ts'
+import { DEFAULT_TEMPLATE_CONFIG, renderTemplate } from '../src/templates.ts'
 
 type Cleanup = { after: (fn: () => Promise<void>) => void }
 
@@ -167,25 +169,27 @@ test('hand-edited invalid values are ignored in favour of the defaults instead o
   assert.notEqual(developer?.maxTurns, 9000)
 })
 
-test('a settings file with the wrong shape fails with SETTINGS_INVALID and setSetting refuses to overwrite it', async (t) => {
+test('a settings file with the wrong shape fails a strict render with SETTINGS_INVALID, a plain render warns, and setSetting refuses to overwrite it', async (t) => {
   const { ctx } = await sandbox(t)
   await mkdir(path.dirname(settingsPath(ctx)), { recursive: true })
   for (const text of ['[]', '{"version":2}', '{ nope', '"x"', 'null', '{"agents":{"maxParallel":3}}']) {
     await writeFile(settingsPath(ctx), text)
-    await assert.rejects(renderNursery(ctx), (error: unknown) => error instanceof SettingsError && error.code === 'SETTINGS_INVALID', text)
+    await assert.rejects(renderNursery(ctx, { strict: true }), (error: unknown) => error instanceof SettingsError && error.code === 'SETTINGS_INVALID', text)
+    const plain = await renderNursery(ctx)
+    assert.equal(plain.agents.length, 10, text)
+    assert.match(plain.warnings.join('\n'), /using the default settings/, text)
     await assert.rejects(setSetting('agents.maxParallel', 4, ctx), { code: 'SETTINGS_INVALID' }, text)
     assert.equal(await readFile(settingsPath(ctx), 'utf8'), text)
   }
 })
 
-test('a base branch with markdown, replacement patterns or placeholders is rendered literally', async (t) => {
+test('a base branch with markdown, replacement patterns or placeholders is refused by kit and rendered literally by the template', async (t) => {
   const { ctx } = await sandbox(t)
   const branch = 'feat$&x$1{{agents.maxParallel}}'
-  await setSetting('rules.baseBranch', branch, ctx)
-  await setSetting('agents.maxParallel', 3, ctx)
-  const rules = await readFile((await renderNursery(ctx)).rulesFile, 'utf8')
+  await assert.rejects(setSetting('rules.baseBranch', branch, ctx), { code: 'INVALID_VALUE' })
+  const rules = renderTemplate(await readFile(TEMPLATE_SOURCES.rules, 'utf8'), { ...DEFAULT_TEMPLATE_CONFIG, baseBranch: branch, maxParallel: 3 })
   assert.ok(rules.includes(`\`${branch}\``))
-  assert.doesNotMatch(rules, /feat\$&x\$1\{\{agents\.maxParallel\}\}.*máximo 10/)
+  assert.match(rules, /máximo 3 agentes/)
 })
 
 test('user agents: CRLF, BOM, duplicate names and block scalars are rejected or normalised without crashing the render', async (t) => {
@@ -199,9 +203,10 @@ test('user agents: CRLF, BOM, duplicate names and block scalars are rejected or 
   await writeAgent(ctx, 'notes.txt', 'not markdown')
   await writeAgent(ctx, 'nested/inner.md', agentText('inner'))
   const rendered = await renderNursery(ctx)
-  assert.deepEqual(rendered.userAgents, [])
-  assert.deepEqual(rendered.invalidAgents.map((agent) => agent.name).sort(), ['a', 'bom', 'crlf', 'developer', 'dotted', 'upper'])
-  assert.deepEqual(rendered.agents.length, 10)
+  assert.deepEqual(rendered.userAgents, ['crlf'])
+  assert.deepEqual(rendered.invalidAgents.map((agent) => agent.name).sort(), ['a', 'bom', 'developer', 'dotted', 'upper'])
+  assert.deepEqual(rendered.agents.length, 11)
+  assert.doesNotMatch(await readFile(path.join(rendered.marketplace, 'agents', 'crlf.md'), 'utf8'), /\r/)
 })
 
 test('user agent names that collide with every nursery role are rejected, in the file name and in the frontmatter', async (t) => {
@@ -301,7 +306,7 @@ test('a user agent symlinked to a file outside the agents directory is read as a
   assert.ok(!existsSync(path.join(path.dirname(outside), 'linked.md')))
 })
 
-test('a broken symlink named like an agent is reported as invalid instead of crashing every render', { todo: 'bug: loadUserAgents reads without try/catch, ENOENT aborts renderNursery' }, async (t) => {
+test('a broken symlink named like an agent is reported as invalid instead of crashing every render', async (t) => {
   const { ctx } = await sandbox(t)
   await mkdir(userAgentsDir(ctx), { recursive: true })
   await symlink('/nonexistent/target.md', path.join(userAgentsDir(ctx), 'broken.md'))
@@ -311,7 +316,7 @@ test('a broken symlink named like an agent is reported as invalid instead of cra
   assert.deepEqual(rendered.invalidAgents.map((agent) => agent.name), ['broken'])
 })
 
-test('a directory named like an agent (x.md/) is reported as invalid instead of crashing every render', { todo: 'bug: loadUserAgents readFile throws EISDIR and aborts renderNursery' }, async (t) => {
+test('a directory named like an agent (x.md/) is reported as invalid instead of crashing every render', async (t) => {
   const { ctx } = await sandbox(t)
   await mkdir(path.join(userAgentsDir(ctx), 'folder.md'), { recursive: true })
   await writeAgent(ctx, 'fine.md', agentText('fine'))
@@ -320,7 +325,7 @@ test('a directory named like an agent (x.md/) is reported as invalid instead of 
   assert.deepEqual(rendered.invalidAgents.map((agent) => agent.name), ['folder'])
 })
 
-test('a user agent called "enabled" is rejected instead of breaking every render with UNKNOWN_KEY', { todo: 'bug: validateUserAgent accepts "enabled" but kit reserves agents.enabled, so loadConfig throws UNKNOWN_KEY for agents.enabled.model' }, async (t) => {
+test('a user agent called "enabled" is rejected instead of breaking every render with UNKNOWN_KEY', async (t) => {
   const { ctx } = await sandbox(t)
   await writeAgent(ctx, 'enabled.md', agentText('enabled'))
   await writeAgent(ctx, 'fine.md', agentText('fine'))
@@ -329,12 +334,12 @@ test('a user agent called "enabled" is rejected instead of breaking every render
   assert.deepEqual(rendered.invalidAgents.map((agent) => agent.name), ['enabled'])
 })
 
-test('duplicate frontmatter keys are rejected because Claude Code parses the file as strict YAML', { todo: 'bug: validateUserAgent keeps the last duplicate key (tools: Read, then tools: Bash, Edit, Write) and ships the invalid YAML' }, () => {
+test('duplicate frontmatter keys are rejected because Claude Code parses the file as strict YAML', () => {
   const text = '---\nname: dup\ndescription: d\ntools: Read\ntools: Bash, Edit, Write\n---\nbody\n'
   assert.equal(validateUserAgent('dup.md', text).ok, false)
 })
 
-test('a block scalar description is rejected instead of being published as "|"', { todo: 'bug: parseFrontmatter is line based, description: | is stored as "|"' }, async (t) => {
+test('a block scalar description is rejected instead of being published as "|"', async (t) => {
   const { ctx } = await sandbox(t)
   await writeAgent(ctx, 'block.md', '---\nname: block\ndescription: |\n  multi line\n  description\n---\nbody\n')
   const plan = await planNursery(ctx)
