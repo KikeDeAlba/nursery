@@ -129,6 +129,33 @@ test('applyOverrides replaces frontmatter fields, including per-tool blocks, and
   assert.equal(agents.parseFrontmatter(agents.renderForAgent(result, 'gemini')).attributes['maxTurns'], '5')
 })
 
+test('applyOverrides quotes values that are not plain yaml scalars', () => {
+  const source = '---\nname: x\nmodel: sonnet\n---\nbody\n'
+  const result = applyOverrides(source, { model: 'a: b', effort: 'high #x', maxTurns: '7' })
+  assert.equal(result, '---\nname: x\nmodel: "a: b"\nmaxTurns: 7\neffort: "high #x"\n---\nbody\n')
+  const { attributes } = agents.parseFrontmatter(result)
+  assert.equal(attributes['model'], 'a: b')
+  assert.equal(attributes['effort'], 'high #x')
+  assert.equal(attributes['maxTurns'], '7')
+  assert.equal(applyOverrides(source, { model: 'openai/gpt-5.1' }), '---\nname: x\nmodel: openai/gpt-5.1\n---\nbody\n')
+})
+
+test('a render sweeps staging and swap leftovers from an interrupted render', async (t) => {
+  const { ctx } = await sandbox(t)
+  const first = await renderNursery(ctx)
+  const rendered = path.dirname(first.policyFile)
+  const leftovers = [
+    path.join(first.root, '.render-dead'),
+    `${first.marketplace}.old-dead`,
+    `${rendered}.old-dead`,
+  ]
+  for (const leftover of leftovers) await mkdir(path.join(leftover, 'nested'), { recursive: true })
+  await renderNursery(ctx)
+  for (const leftover of leftovers) assert.ok(!existsSync(leftover), leftover)
+  assert.ok(existsSync(first.marketplace))
+  assert.ok(existsSync(first.policyFile))
+})
+
 test('a valid user agent is rendered like a role and joins the rules', async (t) => {
   const { ctx } = await sandbox(t)
   await writeUserAgent(ctx, 'revisor-sql', SQL_AGENT)

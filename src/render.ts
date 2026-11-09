@@ -102,6 +102,12 @@ export function renderedDir(ctx: PlatformContext = platformContext()): string {
   return path.join(nurseryDataDir(ctx), 'rendered')
 }
 
+const PLAIN_SCALAR = /^[A-Za-z0-9][A-Za-z0-9._/@+-]*$/
+
+function yamlScalar(value: string): string {
+  return PLAIN_SCALAR.test(value) ? value : JSON.stringify(value)
+}
+
 export function applyOverrides(content: string, overrides: AgentOverrides, drop: readonly string[] = []): string {
   if (!content.startsWith('---\n')) return content
   const end = content.indexOf('\n---', 4)
@@ -114,7 +120,7 @@ export function applyOverrides(content: string, overrides: AgentOverrides, drop:
       const field = /^([A-Za-z0-9_-]+):/.exec(line)?.[1]
       return field === undefined || (!(replaced as string[]).includes(field) && !drop.includes(field))
     })
-  const added = replaced.map((field) => `${field}: ${overrides[field]}`)
+  const added = replaced.map((field) => `${field}: ${yamlScalar(overrides[field] ?? '')}`)
   return `---\n${[...kept, ...added].join('\n')}${content.slice(end)}`
 }
 
@@ -235,7 +241,20 @@ export async function renderNursery(ctx: PlatformContext = platformContext(), op
   return withFileLock(path.join(root, 'render'), () => renderLocked(ctx, options))
 }
 
+async function removeMatching(dir: string, prefix: string): Promise<void> {
+  if (!existsSync(dir)) return
+  for (const name of await readdir(dir)) {
+    if (name.startsWith(prefix)) await rm(path.join(dir, name), { recursive: true, force: true })
+  }
+}
+
+async function sweepOrphans(root: string, targets: readonly string[]): Promise<void> {
+  await removeMatching(root, '.render-')
+  for (const target of targets) await removeMatching(path.dirname(target), `${path.basename(target)}.old-`)
+}
+
 async function renderLocked(ctx: PlatformContext, options: PlanOptions): Promise<RenderedNursery> {
+  await sweepOrphans(nurseryDataDir(ctx), [marketplaceDir(ctx), renderedDir(ctx)])
   const plan = await planNursery(ctx, options)
   const { config } = plan
   const finals = plan.agents.filter((agent) => agent.enabled)
