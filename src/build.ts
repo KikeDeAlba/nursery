@@ -1,7 +1,8 @@
 import { existsSync } from 'node:fs'
-import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises'
+import { mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { agents } from '@kikedealba/kit'
+import { renderTemplate } from './templates.ts'
 import { PACKAGE_ROOT } from './version.ts'
 
 export const SOURCE_DIR = path.join(PACKAGE_ROOT, 'src', 'agents')
@@ -9,6 +10,51 @@ export const CONVENTIONS_DIR = path.join(PACKAGE_ROOT, 'src', 'conventions')
 export const AGENTS_DIR = path.join(PACKAGE_ROOT, 'agents')
 export const SUBAGENTS_DIR = path.join(PACKAGE_ROOT, 'subagents')
 export const RULES_FILE = path.join(PACKAGE_ROOT, 'rules', 'RULES.md')
+export const TEMPLATES_DIR = path.join(PACKAGE_ROOT, 'src', 'templates')
+
+export const TEMPLATE_SOURCES = {
+  rules: path.join(TEMPLATES_DIR, 'RULES.md'),
+  antigravity: path.join(TEMPLATES_DIR, 'antigravity.md'),
+  skill: path.join(TEMPLATES_DIR, 'SKILL.md'),
+  policy: path.join(TEMPLATES_DIR, 'gemini-plan.toml'),
+} as const
+
+export const TEMPLATE_TARGETS: Record<keyof typeof TEMPLATE_SOURCES, string> = {
+  rules: RULES_FILE,
+  antigravity: path.join(PACKAGE_ROOT, 'rules', 'antigravity.md'),
+  skill: path.join(PACKAGE_ROOT, 'skills', 'nursery', 'SKILL.md'),
+  policy: path.join(PACKAGE_ROOT, 'rules', 'gemini-plan.toml'),
+}
+
+export interface BuiltTemplate {
+  target: string
+  content: string
+}
+
+export async function buildTemplates(sources: Record<keyof typeof TEMPLATE_SOURCES, string> = TEMPLATE_SOURCES, targets: Record<keyof typeof TEMPLATE_SOURCES, string> = TEMPLATE_TARGETS): Promise<BuiltTemplate[]> {
+  const built: BuiltTemplate[] = []
+  for (const key of Object.keys(sources) as (keyof typeof TEMPLATE_SOURCES)[]) built.push({ target: targets[key], content: renderTemplate(await readFile(sources[key], 'utf8')) })
+  return built
+}
+
+export function displayPath(root: string, target: string, platform: path.PlatformPath = path): string {
+  return platform.relative(root, target).split(platform.sep).join('/')
+}
+
+export async function staleTemplates(built: readonly BuiltTemplate[], root: string = PACKAGE_ROOT): Promise<string[]> {
+  const stale: string[] = []
+  for (const { target, content } of built) {
+    if (!existsSync(target) || (await readFile(target, 'utf8')) !== content) stale.push(displayPath(root, target))
+  }
+  return stale
+}
+
+export async function writeTemplates(built: readonly BuiltTemplate[]): Promise<void> {
+  for (const { target, content } of built) {
+    await mkdir(path.dirname(target), { recursive: true })
+    await writeFile(target, content)
+  }
+}
 
 const INCLUDE = /^@include\s+([a-z0-9-]+)\s*$/
 
@@ -74,6 +120,7 @@ export async function staleAgents(built: readonly BuiltAgent[], agentsDir: strin
 export async function writeAgents(built: readonly BuiltAgent[], agentsDir: string = AGENTS_DIR, subagentsDir: string = SUBAGENTS_DIR): Promise<void> {
   for (const { dir, files } of outputs(built, agentsDir, subagentsDir)) {
     await mkdir(dir, { recursive: true })
+    for (const file of await markdownFiles(dir)) if (!files.has(file)) await rm(path.join(dir, file), { force: true })
     for (const [file, content] of files) await writeFile(path.join(dir, file), content)
   }
 }

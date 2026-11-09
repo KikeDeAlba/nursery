@@ -1,17 +1,19 @@
-import { readFile } from 'node:fs/promises'
-import path from 'node:path'
 import { parseArgs } from 'node:util'
 import { agents } from '@kikedealba/kit'
 import { ENVELOPE_VERSION, errorEnvelope, successEnvelope, writeJson } from '@kikedealba/kit/envelope'
-import { agentNames, buildAgents, staleAgents, writeAgents, AGENTS_DIR, SUBAGENTS_DIR } from './build.ts'
+import { buildAgents, buildTemplates, staleAgents, staleTemplates, writeAgents, writeTemplates, AGENTS_DIR, SUBAGENTS_DIR } from './build.ts'
 import { runGeminiHook } from './hooks/gemini-hook.ts'
+import { refreshProfiles } from './refresh.ts'
+import { planNursery } from './render.ts'
 import { CAPABILITIES, TOOL, checkMemory, setupTool, uninstallTool, type AgentSelection } from './setup.ts'
+import type { InvalidUserAgent } from './user-agents.ts'
 import { SCHEMA_VERSION, VERSION } from './version.ts'
 
 const HELP = `nursery ${VERSION}
 
 Uso:
   nursery setup [--agents claude,opencode,codex,gemini,antigravity|all|detected] [--replace-legacy] [--json]
+  nursery setup --refresh [--agents ...] [--profile <nombre>] [--json]
   nursery uninstall [--json]
   nursery check [--agents ...] [--json]
   nursery list [--json]
@@ -38,12 +40,37 @@ function printSteps(steps: readonly agents.Step[]): void {
   for (const step of steps) out(`${step.state === 'failed' || step.state === 'unavailable' || step.item === 'legacy rules' ? '!' : '-'} ${step.agent}: ${step.detail}`)
 }
 
+function printInvalid(invalid: readonly InvalidUserAgent[]): void {
+  for (const agent of invalid) out(`! user agent ${agent.name} skipped (${agent.file}): ${agent.errors.join('; ')}`)
+}
+
+async function refresh(values: { agents?: string; profile?: string; 'replace-legacy': boolean; json: boolean }): Promise<number> {
+  const result = await refreshProfiles(readAgents(values.agents), { replaceLegacy: values['replace-legacy'], ...(values.profile !== undefined ? { profile: values.profile } : {}) })
+  if (values.json) writeJson(successEnvelope(SCHEMA_VERSION, 'setup', { refresh: true, ...result }))
+  else {
+    out(`- rendered ${result.agents.length} agents into ${result.marketplace} (${result.version})`)
+    printInvalid(result.invalidAgents)
+    for (const profile of result.profiles) {
+      out(`- profile ${profile.profile}${profile.builtin ? ' (builtin)' : ''}: ${profile.agents.join(', ') || 'no agents'}`)
+      printSteps(profile.steps)
+    }
+  }
+  return result.profiles.some((profile) => profile.steps.some((step) => step.state === 'failed')) ? 1 : 0
+}
+
 async function setup(argv: string[]): Promise<number> {
-  const { values } = parseArgs({ args: argv, options: { agents: { type: 'string' }, 'replace-legacy': { type: 'boolean', default: false }, json: { type: 'boolean', default: false } } })
-  const { manifest, steps } = await setupTool(readAgents(values.agents), { replaceLegacy: values['replace-legacy'] })
-  if (values.json) writeJson(successEnvelope(SCHEMA_VERSION, 'setup', { manifest, steps }))
+  const { values } = parseArgs({
+    args: argv,
+    options: { agents: { type: 'string' }, refresh: { type: 'boolean', default: false }, profile: { type: 'string' }, 'replace-legacy': { type: 'boolean', default: false }, json: { type: 'boolean', default: false } },
+  })
+  if (values.refresh) return refresh(values)
+  if (values.profile !== undefined) throw new UsageError('--profile only applies with --refresh.')
+  const { manifest, steps, warnings, invalidAgents } = await setupTool(readAgents(values.agents), { replaceLegacy: values['replace-legacy'] })
+  if (values.json) writeJson(successEnvelope(SCHEMA_VERSION, 'setup', { manifest, steps, warnings, invalidAgents }))
   else {
     out(`- registered in ${manifest}`)
+    for (const warning of warnings) out(`! ${warning}`)
+    printInvalid(invalidAgents)
     printSteps(steps)
   }
   return steps.some((step) => step.state === 'failed') ? 1 : 0
@@ -70,14 +97,24 @@ async function check(argv: string[]): Promise<number> {
 
 async function list(argv: string[]): Promise<number> {
   const { values } = parseArgs({ args: argv, options: { json: { type: 'boolean', default: false } } })
-  const rows = await Promise.all(
-    (await agentNames()).map(async (name) => {
-      const { attributes } = agents.parseFrontmatter(await readFile(path.join(AGENTS_DIR, `${name}.md`), 'utf8'))
-      return { name, model: attributes['model'] ?? 'inherit', effort: attributes['effort'] ?? '', description: attributes['description'] ?? '' }
-    }),
-  )
-  if (values.json) writeJson(successEnvelope(SCHEMA_VERSION, 'list', { agents: rows }))
-  else for (const row of rows) out(`${row.name.padEnd(14)} ${`${row.model}/${row.effort}`.padEnd(24)} ${row.description}`)
+  const plan = await planNursery()
+  const rows = plan.agents.map((agent) => ({
+    name: agent.name,
+    source: agent.source,
+    enabled: agent.enabled,
+    model: agent.model ?? 'inherit',
+    effort: agent.effort ?? '',
+    maxTurns: agent.maxTurns,
+    readOnly: agent.readOnly,
+    description: agent.description,
+    ...(agent.file !== null ? { file: agent.file } : {}),
+  }))
+  if (values.json) writeJson(successEnvelope(SCHEMA_VERSION, 'list', { agents: rows, invalidAgents: plan.invalidAgents, warnings: plan.warnings }))
+  else {
+    for (const warning of plan.warnings) out(`! ${warning}`)
+    for (const row of rows) out(`${row.enabled ? ' ' : '-'} ${row.name.padEnd(14)} ${`${row.model}/${row.effort}`.padEnd(24)} ${row.source === 'user' ? '[user] ' : ''}${row.description}`)
+    printInvalid(plan.invalidAgents)
+  }
   return 0
 }
 
@@ -92,13 +129,15 @@ function capabilities(argv: string[]): number {
 async function build(argv: string[]): Promise<number> {
   const { values } = parseArgs({ args: argv, options: { check: { type: 'boolean', default: false } } })
   const built = await buildAgents()
-  const stale = await staleAgents(built)
+  const templates = await buildTemplates()
+  const stale = [...(await staleAgents(built)), ...(await staleTemplates(templates))]
   if (values.check) {
     if (stale.length > 0) out(`! out of date: ${stale.join(', ')}. Run: pnpm build:agents`)
     return stale.length > 0 ? 1 : 0
   }
   await writeAgents(built)
-  out(`- ${built.length} agents written to ${AGENTS_DIR} and ${SUBAGENTS_DIR}`)
+  await writeTemplates(templates)
+  out(`- ${built.length} agents written to ${AGENTS_DIR} and ${SUBAGENTS_DIR}; ${templates.length} templates rendered with the defaults`)
   return 0
 }
 
@@ -119,9 +158,12 @@ async function geminiHook(argv: readonly string[]): Promise<number> {
   return 0
 }
 
+const DOMAIN_ERRORS = new Set(['SettingsError', 'ProfileError'])
+
 function errorCode(error: unknown): string {
   if (error instanceof UsageError) return 'USAGE'
   const code = error instanceof Error && 'code' in error ? String(error.code) : ''
+  if (error instanceof Error && DOMAIN_ERRORS.has(error.name) && code.length > 0) return code
   return code.startsWith('ERR_PARSE_ARGS') ? 'USAGE' : 'UNEXPECTED'
 }
 

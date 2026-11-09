@@ -11,6 +11,7 @@ import { assertConformance } from '@kikedealba/kit/conformance'
 import { platformContext } from '@kikedealba/kit/platform'
 import { ANTIGRAVITY_RULES_FILE, CAPABILITIES, GEMINI_COMMAND_FILE, GEMINI_POLICY_FILE, binCommand, checkMemory, geminiHooks, geminiIntegration, integration, shellCommand, geminiPolicyPath, findLegacy, memoryPath, installAgents, manifest, removeLegacy, setupTool, uninstallAgents, uninstallTool, LEGACY_HEADING } from '../src/setup.ts'
 import { SUBAGENTS_DIR } from '../src/build.ts'
+import { renderNursery } from '../src/render.ts'
 import { VERSION } from '../src/version.ts'
 
 const BIN = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'src', 'bin', 'nursery.ts')
@@ -80,10 +81,15 @@ test('a clean install writes rules and subagents for every agent, and a second r
   assert.ok(!existsSync(path.join(homes.opencode, 'agents', 'developer.md')))
 })
 
-test('the other tools install the portable subagents', async () => {
-  const subagents = (await integration()).subagents ?? []
+test('the other tools install the rendered portable subagents', async (t) => {
+  const { options } = await sandbox(t)
+  const rendered = await renderNursery(options.ctx)
+  const subagents = integration(rendered).subagents ?? []
   assert.equal(subagents.length, 10)
-  for (const subagent of subagents) assert.equal(subagent.file, path.join(SUBAGENTS_DIR, `${subagent.name}.md`))
+  for (const subagent of subagents) {
+    assert.equal(subagent.file, path.join(rendered.subagentsDir, `${subagent.name}.md`))
+    assert.equal(await readFile(subagent.file, 'utf8'), await readFile(path.join(SUBAGENTS_DIR, `${subagent.name}.md`), 'utf8'))
+  }
 })
 
 test('unmarked rules block the memory block until --replace-legacy', async (t) => {
@@ -263,13 +269,15 @@ test('the gemini hooks use the PowerShell call operator on windows', async (t) =
   assert.match(hooks['BeforeTool']?.[0]?.hooks[0]?.command ?? '', /^& '[^']+' '[^']+' gemini-hook BeforeTool$/)
 })
 
-test('only the gemini integration carries the flow command and hooks', async () => {
-  const shared = await integration()
+test('only the gemini integration carries the flow command and hooks', async (t) => {
+  const { options } = await sandbox(t)
+  const rendered = await renderNursery(options.ctx)
+  const shared = integration(rendered)
   assert.deepEqual(shared.userSkills?.map((skill) => skill.name), ['nursery'])
   assert.equal(shared.commands, undefined)
   assert.equal(shared.gemini, undefined)
 
-  const gemini = await geminiIntegration()
+  const gemini = await geminiIntegration(rendered)
   assert.equal(gemini.userSkills, undefined)
   assert.deepEqual(gemini.commands, [{ name: 'nursery', file: GEMINI_COMMAND_FILE }])
   assert.deepEqual(Object.keys(gemini.gemini?.hooks ?? {}), ['BeforeAgent', 'BeforeTool', 'AfterTool', 'AfterAgent'])
@@ -367,9 +375,12 @@ async function antigravitySandbox(t: { after: (fn: () => Promise<void>) => void 
 
 const blockCount = (text: string) => text.match(/<!-- kit:nursery:begin -->/g)?.length ?? 0
 
-test('the shared integration points antigravity at its own rules file', async () => {
-  assert.deepEqual((await integration()).antigravity, { rules: ANTIGRAVITY_RULES_FILE })
+test('the shared integration points antigravity at its own rendered rules file', async (t) => {
+  const { options } = await sandbox(t)
+  const rendered = await renderNursery(options.ctx)
+  assert.deepEqual(integration(rendered).antigravity, { rules: rendered.antigravityRulesFile })
   assert.ok(existsSync(ANTIGRAVITY_RULES_FILE))
+  assert.match(await readFile(rendered.antigravityRulesFile, 'utf8'), /máximo 10 subagentes/)
 })
 
 test('setup for antigravity installs the plugin through agy, and a second run changes nothing', async (t) => {
@@ -384,7 +395,7 @@ test('setup for antigravity installs the plugin through agy, and a second run ch
 
   const plugin = path.join(homes.antigravity, 'plugins', 'nursery')
   assert.equal((JSON.parse(await readFile(path.join(plugin, 'plugin.json'), 'utf8')) as { name: string }).name, 'nursery')
-  const names = (await integration()).subagents?.map((subagent) => subagent.name) ?? []
+  const names = integration(await renderNursery(options.ctx)).subagents?.map((subagent) => subagent.name) ?? []
   assert.equal(names.length, 10)
   assert.deepEqual((await readdir(path.join(plugin, 'agents'))).sort(), names.map((name) => `${name}.md`).sort())
   const developer = await readFile(path.join(plugin, 'agents', 'developer.md'), 'utf8')
@@ -422,7 +433,7 @@ for (const first of ['gemini', 'antigravity'] as const) {
     const { homes, options } = await antigravitySandbox(t)
     await installAgents(['gemini', 'antigravity'], options)
     const file = path.join(homes.gemini, 'GEMINI.md')
-    const partial = await agents.uninstallIntegration(first === 'gemini' ? await geminiIntegration(options.ctx) : await integration(), { ...options, agents: [first] })
+    const partial = await agents.uninstallIntegration(first === 'gemini' ? await geminiIntegration(await renderNursery(options.ctx), options.ctx) : integration(await renderNursery(options.ctx)), { ...options, agents: [first] })
     assert.deepEqual(partial.filter((step) => step.item === 'memory').map((step) => step.state), ['skipped'])
     assert.equal(blockCount(await readFile(file, 'utf8')), 1)
 

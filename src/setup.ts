@@ -1,16 +1,24 @@
 import { existsSync } from 'node:fs'
-import { copyFile, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { copyFile, mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { agents } from '@kikedealba/kit'
-import { platformContext, type PlatformContext } from '@kikedealba/kit/platform'
+import { platformContext, run, type PlatformContext } from '@kikedealba/kit/platform'
 import { defineManifest, registerTool, stableBin, unregisterTool, type ToolManifest } from '@kikedealba/kit/registry'
-import { RULES_FILE, SUBAGENTS_DIR, agentNames } from './build.ts'
+import { envFor, listProfiles } from '@kikedealba/kit/profiles'
+import { NURSERY_ROLES } from '@kikedealba/kit/settings'
+import { RULES_FILE, TEMPLATE_SOURCES } from './build.ts'
 import { HOOK_EVENTS, type HookEventName } from './flow-types.ts'
+import { marketplaceDir, nurseryDataDir, planNursery, renderNursery, renderedDir, type RenderedNursery } from './render.ts'
+import { renderTemplate } from './templates.ts'
 import { PACKAGE_ROOT, VERSION } from './version.ts'
 
 export const TOOL = 'nursery'
 
 export const CLAUDE_PLUGIN: agents.ClaudePluginSpec = { marketplace: 'KikeDeAlba/nursery', marketplaceName: 'nursery', plugin: 'nursery' }
+
+export function claudePlugin(rendered: RenderedNursery): agents.ClaudePluginSpec {
+  return { ...CLAUDE_PLUGIN, marketplace: rendered.marketplace }
+}
 
 export const CAPABILITIES = ['agents.subagents', 'agents.rules']
 
@@ -63,22 +71,43 @@ export type AgentSelection = readonly agents.AgentName[] | 'detected' | 'all'
 
 export interface SetupOptions extends agents.InstallOptions {
   replaceLegacy?: boolean
+  rendered?: RenderedNursery
 }
 
-export function memoryIntegration(): agents.AgentIntegration {
-  return { tool: TOOL, version: VERSION, memory: RULES_FILE }
+export function memoryIntegration(rendered: RenderedNursery): agents.AgentIntegration {
+  return { tool: TOOL, version: VERSION, memory: rendered.rulesFile }
 }
 
-export async function integration(): Promise<agents.AgentIntegration> {
+export function integration(rendered: RenderedNursery): agents.AgentIntegration {
   return {
     tool: TOOL,
     version: VERSION,
     description: 'Specialist subagents and shared working rules',
-    subagents: (await agentNames(SUBAGENTS_DIR)).map((name) => ({ name, file: path.join(SUBAGENTS_DIR, `${name}.md`) })),
+    subagents: rendered.agents.map((name) => ({ name, file: path.join(rendered.subagentsDir, `${name}.md`) })),
+    userSkills: [{ name: 'nursery', dir: rendered.skillDir }],
+    memory: rendered.rulesFile,
+    antigravity: { rules: rendered.antigravityRulesFile },
+  }
+}
+
+async function removalIntegration(ctx?: PlatformContext): Promise<agents.AgentIntegration> {
+  const dir = path.join(renderedDir(ctx), 'subagents')
+  const rendered = existsSync(dir) ? (await readdir(dir)).filter((file) => file.endsWith('.md')).map((file) => path.basename(file, '.md')) : []
+  const names = [...new Set([...NURSERY_ROLES, ...rendered])]
+  return {
+    tool: TOOL,
+    version: VERSION,
+    description: 'Specialist subagents and shared working rules',
+    subagents: names.map((name) => ({ name, file: path.join(dir, `${name}.md`) })),
     userSkills: [{ name: 'nursery', dir: path.join(PACKAGE_ROOT, 'skills', 'nursery') }],
     memory: RULES_FILE,
     antigravity: { rules: ANTIGRAVITY_RULES_FILE },
   }
+}
+
+function withGemini(base: agents.AgentIntegration, hooks: agents.HookMap): agents.AgentIntegration {
+  const { userSkills: _userSkills, ...rest } = base
+  return { ...rest, commands: [{ name: 'nursery', file: GEMINI_COMMAND_FILE }], gemini: { hooks } }
 }
 
 export const GEMINI_COMMAND_FILE = path.join(PACKAGE_ROOT, 'gemini', 'commands', 'nursery.md')
@@ -108,13 +137,8 @@ export async function geminiHooks(ctx: PlatformContext = platformContext()): Pro
   return hooks
 }
 
-export async function geminiIntegration(ctx?: PlatformContext): Promise<agents.AgentIntegration> {
-  const { userSkills: _userSkills, ...base } = await integration()
-  return {
-    ...base,
-    commands: [{ name: 'nursery', file: GEMINI_COMMAND_FILE }],
-    gemini: { hooks: await geminiHooks(ctx) },
-  }
+export async function geminiIntegration(rendered: RenderedNursery, ctx?: PlatformContext): Promise<agents.AgentIntegration> {
+  return withGemini(integration(rendered), await geminiHooks(ctx))
 }
 
 export function memoryPath(agent: MemoryAgent, options: agents.InstallOptions = {}): string {
@@ -125,9 +149,9 @@ export function geminiPolicyPath(options: agents.InstallOptions = {}): string {
   return path.join(agents.agentHomes(options.ctx ?? platformContext(), options.homes).gemini, 'policies', 'nursery.toml')
 }
 
-async function installGeminiPolicy(options: agents.InstallOptions): Promise<agents.Step> {
+async function installGeminiPolicy(options: agents.InstallOptions, source: string): Promise<agents.Step> {
   const file = geminiPolicyPath(options)
-  const policy = await readFile(GEMINI_POLICY_FILE, 'utf8')
+  const policy = await readFile(source, 'utf8')
   const current = existsSync(file) ? await readFile(file, 'utf8') : null
   if (current === policy) return { agent: 'gemini', item: 'plan policy', state: 'present', detail: `${file} is up to date`, path: file }
   await mkdir(path.dirname(file), { recursive: true })
@@ -140,8 +164,9 @@ async function installGeminiPolicy(options: agents.InstallOptions): Promise<agen
 async function uninstallGeminiPolicy(options: agents.InstallOptions): Promise<agents.Step | null> {
   const file = geminiPolicyPath(options)
   if (!existsSync(file)) return null
-  const policy = await readFile(GEMINI_POLICY_FILE, 'utf8')
-  if ((await readFile(file, 'utf8')) !== policy) {
+  const rendered = path.join(renderedDir(options.ctx), 'gemini-plan.toml')
+  const known = [await readFile(GEMINI_POLICY_FILE, 'utf8'), ...(existsSync(rendered) ? [await readFile(rendered, 'utf8')] : [])]
+  if (!known.includes(await readFile(file, 'utf8'))) {
     return { agent: 'gemini', item: 'plan policy', state: 'skipped', detail: `${file} differs from the nursery policy; it was left in place`, path: file }
   }
   await rm(file, { force: true })
@@ -196,9 +221,154 @@ async function installSplit(full: agents.AgentIntegration, targets: readonly Mem
   return steps
 }
 
+function errorText(error: unknown): string {
+  return error instanceof Error ? (error.message.split('\n')[0] ?? 'failed') : String(error)
+}
+
+interface ClaudeCli {
+  claude: string
+  exec: (command: string, args: readonly string[]) => Promise<void | string>
+}
+
+async function claudeCli(options: agents.InstallOptions): Promise<ClaudeCli | null> {
+  const ctx = options.ctx ?? platformContext()
+  const claude = await (options.locate ?? ((command: string) => agents.findAgentBinary('claude', { ctx })))('claude')
+  if (!claude) return null
+  const exec = options.exec ?? (async (command: string, args: readonly string[]) => (await run(command, args, { env: ctx.env, timeoutMs: 120_000 })).stdout)
+  return { claude, exec }
+}
+
+async function listJson(cli: ClaudeCli, args: readonly string[]): Promise<Record<string, unknown>[] | null> {
+  try {
+    const parsed: unknown = JSON.parse(String((await cli.exec(cli.claude, args)) ?? ''))
+    if (!Array.isArray(parsed)) return null
+    return parsed.filter((item): item is Record<string, unknown> => typeof item === 'object' && item !== null && !Array.isArray(item))
+  } catch {
+    return null
+  }
+}
+
+function pluginId(): string {
+  return `${CLAUDE_PLUGIN.plugin}@${CLAUDE_PLUGIN.marketplaceName}`
+}
+
+async function installedPlugin(cli: ClaudeCli): Promise<Record<string, unknown> | null> {
+  return (await listJson(cli, ['plugin', 'list', '--json']))?.find((entry) => entry['id'] === pluginId() && (entry['scope'] === undefined || entry['scope'] === 'user')) ?? null
+}
+
+type MarketplaceState = 'absent' | 'local' | 'replaced' | 'foreign' | 'failed'
+
+interface MarketplacePreparation {
+  state: MarketplaceState
+  steps: agents.Step[]
+  wasDisabled: boolean
+}
+
+function samePath(left: string, right: string): boolean {
+  return path.resolve(left) === path.resolve(right)
+}
+
+async function prepareMarketplace(rendered: RenderedNursery, cli: ClaudeCli): Promise<MarketplacePreparation> {
+  const item = `marketplace ${CLAUDE_PLUGIN.marketplaceName}`
+  const listed = await listJson(cli, ['plugin', 'marketplace', 'list', '--json'])
+  const entry = listed?.find((candidate) => candidate['name'] === CLAUDE_PLUGIN.marketplaceName)
+  if (!entry) return { state: 'absent', steps: [], wasDisabled: false }
+  const directory = entry['source'] === 'directory' && typeof entry['path'] === 'string' ? entry['path'] : null
+  if (directory !== null && samePath(directory, rendered.marketplace)) return { state: 'local', steps: [], wasDisabled: false }
+  if (directory !== null) {
+    const detail = `marketplace nursery points to ${directory}, not to ${rendered.marketplace}; it was left alone and the plugin was not installed. Run: claude plugin marketplace remove nursery && nursery setup`
+    return { state: 'foreign', steps: [{ agent: 'claude', item, state: 'skipped', detail }], wasDisabled: false }
+  }
+  const wasDisabled = (await installedPlugin(cli))?.['enabled'] === false
+  const origin = typeof entry['repo'] === 'string' ? entry['repo'] : typeof entry['url'] === 'string' ? entry['url'] : String(entry['source'] ?? 'unknown')
+  try {
+    await cli.exec(cli.claude, ['plugin', 'marketplace', 'remove', CLAUDE_PLUGIN.marketplaceName])
+    return { state: 'replaced', steps: [{ agent: 'claude', item, state: 'removed', detail: `removed the marketplace from ${origin}; nursery now installs from ${rendered.marketplace}` }], wasDisabled }
+  } catch (error) {
+    return { state: 'failed', steps: [{ agent: 'claude', item, state: 'failed', detail: `claude plugin marketplace remove failed: ${errorText(error)}` }], wasDisabled }
+  }
+}
+
+export async function prepareClaudeMarketplace(rendered: RenderedNursery, options: agents.InstallOptions = {}): Promise<agents.Step[]> {
+  const cli = await claudeCli(options)
+  return cli ? (await prepareMarketplace(rendered, cli)).steps : []
+}
+
+async function installClaude(rendered: RenderedNursery, options: agents.InstallOptions): Promise<agents.Step[]> {
+  const cli = await claudeCli(options)
+  if (!cli) return agents.installClaudePlugin(claudePlugin(rendered), options)
+  const prepared = await prepareMarketplace(rendered, cli)
+  const steps = [...prepared.steps]
+  if (prepared.state === 'foreign' || prepared.state === 'failed') return steps
+  if (prepared.state === 'local') {
+    const current = await installedPlugin(cli)
+    if (current?.['version'] === rendered.version) {
+      steps.push({ agent: 'claude', item: `plugin ${pluginId()}`, state: 'present', detail: `plugin ${pluginId()} unchanged (${rendered.version})` })
+      return steps
+    }
+  }
+  const installed = await agents.installClaudePlugin(claudePlugin(rendered), options)
+  steps.push(...installed)
+  if (prepared.wasDisabled && !installed.some((step) => step.state === 'failed')) {
+    try {
+      await cli.exec(cli.claude, ['plugin', 'disable', pluginId(), '--scope', 'user'])
+      steps.push({ agent: 'claude', item: `plugin ${pluginId()}`, state: 'skipped', detail: `plugin ${pluginId()} was disabled before the migration and stays disabled` })
+    } catch (error) {
+      steps.push({ agent: 'claude', item: `plugin ${pluginId()}`, state: 'failed', detail: `could not disable ${pluginId()} again: ${errorText(error)}` })
+    }
+  }
+  return steps
+}
+
+async function removeLocalMarketplace(options: agents.InstallOptions): Promise<agents.Step[]> {
+  const cli = await claudeCli(options)
+  if (!cli) return []
+  const local = marketplaceDir(options.ctx)
+  const entry = (await listJson(cli, ['plugin', 'marketplace', 'list', '--json']))?.find((candidate) => candidate['name'] === CLAUDE_PLUGIN.marketplaceName)
+  if (!entry || entry['source'] !== 'directory' || typeof entry['path'] !== 'string' || !samePath(entry['path'], local)) return []
+  const item = `marketplace ${CLAUDE_PLUGIN.marketplaceName}`
+  try {
+    await cli.exec(cli.claude, ['plugin', 'marketplace', 'remove', CLAUDE_PLUGIN.marketplaceName])
+    return [{ agent: 'claude', item, state: 'removed', detail: `removed the local marketplace ${local}` }]
+  } catch (error) {
+    return [{ agent: 'claude', item, state: 'failed', detail: `claude plugin marketplace remove failed: ${errorText(error)}` }]
+  }
+}
+
+function excludedSteps(rendered: RenderedNursery, targets: readonly MemoryAgent[]): agents.Step[] {
+  return rendered.excluded.filter((entry) => targets.includes(entry.harness)).map((entry) => ({ agent: entry.harness, item: `subagent ${entry.agent}`, state: 'skipped' as const, detail: entry.detail }))
+}
+
+function withoutExcluded(base: agents.AgentIntegration, rendered: RenderedNursery, harness: MemoryAgent): agents.AgentIntegration {
+  const skip = new Set(rendered.excluded.filter((entry) => entry.harness === harness).map((entry) => entry.agent))
+  return skip.size === 0 ? base : { ...base, subagents: (base.subagents ?? []).filter((subagent) => !skip.has(subagent.name)) }
+}
+
+function unsupportedSteps(rendered: RenderedNursery, targets: readonly MemoryAgent[]): agents.Step[] {
+  return rendered.unsupported
+    .filter((entry) => targets.includes(entry.harness))
+    .map((entry) => ({ agent: entry.harness, item: `subagent ${entry.agent}`, state: 'skipped' as const, detail: `${entry.field}: ${entry.value} has no equivalent in ${entry.harness}; it was not applied` }))
+}
+
+async function pruneSubagents(rendered: RenderedNursery, targets: readonly MemoryAgent[], options: agents.InstallOptions): Promise<agents.Step[]> {
+  const homes = agents.agentHomes(options.ctx ?? platformContext(), options.homes)
+  const steps: agents.Step[] = []
+  for (const agent of targets) {
+    if (agent !== 'opencode' && agent !== 'codex') continue
+    for (const name of rendered.stale) {
+      const file = agent === 'opencode' ? path.join(homes.opencode, 'agents', `${name}.md`) : path.join(homes.codex, 'agents', `${name}.toml`)
+      if (!existsSync(file)) continue
+      await rm(file, { force: true })
+      steps.push({ agent, item: `subagent ${name}`, state: 'removed', detail: `removed ${file}; ${name} is not enabled`, path: file })
+    }
+  }
+  return steps
+}
+
 export async function installAgents(selection: AgentSelection, options: SetupOptions = {}): Promise<agents.Step[]> {
   const targets = (await resolveSelection(selection, options)).filter((agent): agent is MemoryAgent => agent !== 'claude-desktop')
-  const steps: agents.Step[] = []
+  const rendered = options.rendered ?? (await renderNursery(options.ctx))
+  const steps: agents.Step[] = [...unsupportedSteps(rendered, targets), ...excludedSteps(rendered, targets)]
   const blocked = new Set<MemoryAgent>()
   const handled = new Map<string, agents.Step | null>()
   for (const agent of targets) {
@@ -211,35 +381,59 @@ export async function installAgents(selection: AgentSelection, options: SetupOpt
     if (legacy.state === 'skipped') blocked.add(agent)
   }
   if (targets.includes('claude')) {
-    steps.push(...(await agents.installClaudePlugin(CLAUDE_PLUGIN, options)))
-    if (!blocked.has('claude')) steps.push(...(await agents.installIntegration(memoryIntegration(), { ...options, agents: ['claude'] })))
+    steps.push(...(await installClaude(rendered, options)))
+    if (!blocked.has('claude')) steps.push(...(await agents.installIntegration(memoryIntegration(rendered), { ...options, agents: ['claude'] })))
   }
-  const others = targets.filter((agent) => agent === 'opencode' || agent === 'codex' || agent === 'antigravity')
-  if (others.length > 0) steps.push(...(await installSplit(await integration(), others, blocked, options)))
-  if (targets.includes('gemini')) steps.push(...(await installSplit(await geminiIntegration(options.ctx), ['gemini'], blocked, options)))
-  if (targets.includes('gemini')) steps.push(await installGeminiPolicy(options))
+  const others = targets.filter((agent) => agent === 'opencode' || agent === 'codex')
+  if (others.length > 0) {
+    steps.push(...(await installSplit(integration(rendered), others, blocked, options)))
+    steps.push(...(await pruneSubagents(rendered, others, options)))
+  }
+  if (targets.includes('antigravity')) steps.push(...(await installSplit(withoutExcluded(integration(rendered), rendered, 'antigravity'), ['antigravity'], blocked, options)))
+  if (targets.includes('gemini')) steps.push(...(await installSplit(await geminiIntegration(rendered, options.ctx), ['gemini'], blocked, options)))
+  if (targets.includes('gemini')) steps.push(await installGeminiPolicy(options, rendered.policyFile))
   return steps
 }
 
-export async function uninstallAgents(options: agents.InstallOptions = {}): Promise<agents.Step[]> {
+export interface UninstallOptions extends agents.InstallOptions {
+  harnesses?: readonly MemoryAgent[]
+}
+
+export async function uninstallAgents(options: UninstallOptions = {}): Promise<agents.Step[]> {
+  const wanted = new Set<MemoryAgent>(options.harnesses ?? MEMORY_AGENTS)
   const steps: agents.Step[] = []
-  steps.push(...(await agents.uninstallClaudePlugin(CLAUDE_PLUGIN, options)))
-  steps.push(...(await agents.uninstallIntegration(memoryIntegration(), { ...options, agents: ['claude'] })))
-  steps.push(...(await agents.uninstallIntegration(await integration(), { ...options, agents: ['opencode', 'codex', 'antigravity'] })))
-  steps.push(...(await agents.uninstallIntegration(await geminiIntegration(options.ctx), { ...options, agents: ['gemini'] })))
-  const policy = await uninstallGeminiPolicy(options)
-  if (policy) steps.push(policy)
+  const removal = await removalIntegration(options.ctx)
+  if (wanted.has('claude')) {
+    steps.push(...(await agents.uninstallClaudePlugin(CLAUDE_PLUGIN, options)))
+    steps.push(...(await removeLocalMarketplace(options)))
+    steps.push(...(await agents.uninstallIntegration({ tool: TOOL, version: VERSION, memory: RULES_FILE }, { ...options, agents: ['claude'] })))
+  }
+  const others = (['opencode', 'codex', 'antigravity'] as const).filter((agent) => wanted.has(agent))
+  if (others.length > 0) steps.push(...(await agents.uninstallIntegration(removal, { ...options, agents: others })))
+  if (wanted.has('gemini')) {
+    steps.push(...(await agents.uninstallIntegration(withGemini(removal, await geminiHooks(options.ctx)), { ...options, agents: ['gemini'] })))
+    const policy = await uninstallGeminiPolicy(options)
+    if (policy) steps.push(policy)
+  }
   return steps
 }
 
 export interface SetupResult {
   manifest: string
   steps: agents.Step[]
+  warnings: string[]
+  invalidAgents: RenderedNursery['invalidAgents']
 }
 
 export async function setupTool(selection: AgentSelection, options: SetupOptions = {}): Promise<SetupResult> {
   const manifestPath = await register(options.ctx)
-  return { manifest: manifestPath, steps: await installAgents(selection, options) }
+  const rendered = options.rendered ?? (await renderNursery(options.ctx))
+  return { manifest: manifestPath, steps: await installAgents(selection, { ...options, rendered }), warnings: rendered.warnings, invalidAgents: rendered.invalidAgents }
+}
+
+export async function currentRules(ctx?: PlatformContext): Promise<string> {
+  const { config } = await planNursery(ctx)
+  return renderTemplate(await readFile(TEMPLATE_SOURCES.rules, 'utf8'), config)
 }
 
 export interface UninstallResult {
@@ -248,7 +442,15 @@ export interface UninstallResult {
 }
 
 export async function uninstallTool(options: agents.InstallOptions = {}): Promise<UninstallResult> {
-  const steps = await uninstallAgents(options)
+  const ctx = options.ctx ?? platformContext()
+  const profiles = await listProfiles(ctx).then((list) => list.profiles, () => null)
+  const steps: agents.Step[] = []
+  if (profiles === null) steps.push(...(await uninstallAgents(options)))
+  for (const profile of profiles ?? []) {
+    const scoped = { ...options, ctx: { ...ctx, env: envFor(profile, 'all', ctx.env) } }
+    steps.push(...(await uninstallAgents(profile.builtin ? scoped : { ...scoped, harnesses: ['claude', 'codex'] })))
+  }
+  await rm(nurseryDataDir(ctx), { recursive: true, force: true })
   return { unregistered: await unregister(options.ctx), steps }
 }
 
@@ -261,7 +463,7 @@ export interface MemoryReport {
 }
 
 export async function checkMemory(selection: AgentSelection, options: agents.InstallOptions = {}): Promise<MemoryReport[]> {
-  const rules = await readFile(RULES_FILE, 'utf8')
+  const rules = await currentRules(options.ctx)
   const targets = (await resolveSelection(selection, options)).filter((agent): agent is MemoryAgent => agent !== 'claude-desktop')
   const reports: MemoryReport[] = []
   for (const agent of targets) {
