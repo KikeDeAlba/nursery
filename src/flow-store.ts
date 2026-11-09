@@ -80,7 +80,7 @@ export function sessionLockPath(file: string): string {
 async function removeLegacyLocks(file: string): Promise<void> {
   for (const legacy of [`${file}.lock`, `${file}.lock.break`]) {
     const info = await lstat(legacy).catch(() => null)
-    if (info?.isDirectory() && Date.now() - info.mtimeMs > LEGACY_LOCK_STALE_MS) await rm(legacy, { recursive: true, force: true })
+    if (info?.isDirectory() && Date.now() - info.mtimeMs > LEGACY_LOCK_STALE_MS) await rm(legacy, { recursive: true, force: true }).catch(() => undefined)
   }
 }
 
