@@ -5,13 +5,16 @@ import { agents } from '@kikedealba/kit'
 import { ENVELOPE_VERSION, errorEnvelope, successEnvelope, writeJson } from '@kikedealba/kit/envelope'
 import { agentNames, buildAgents, staleAgents, writeAgents, AGENTS_DIR, SUBAGENTS_DIR } from './build.ts'
 import { runGeminiHook } from './hooks/gemini-hook.ts'
+import { refreshProfiles } from './refresh.ts'
 import { CAPABILITIES, TOOL, checkMemory, setupTool, uninstallTool, type AgentSelection } from './setup.ts'
+import type { InvalidUserAgent } from './user-agents.ts'
 import { SCHEMA_VERSION, VERSION } from './version.ts'
 
 const HELP = `nursery ${VERSION}
 
 Uso:
   nursery setup [--agents claude,opencode,codex,gemini,antigravity|all|detected] [--replace-legacy] [--json]
+  nursery setup --refresh [--agents ...] [--profile <nombre>] [--json]
   nursery uninstall [--json]
   nursery check [--agents ...] [--json]
   nursery list [--json]
@@ -38,8 +41,31 @@ function printSteps(steps: readonly agents.Step[]): void {
   for (const step of steps) out(`${step.state === 'failed' || step.state === 'unavailable' || step.item === 'legacy rules' ? '!' : '-'} ${step.agent}: ${step.detail}`)
 }
 
+function printInvalid(invalid: readonly InvalidUserAgent[]): void {
+  for (const agent of invalid) out(`! user agent ${agent.name} skipped (${agent.file}): ${agent.errors.join('; ')}`)
+}
+
+async function refresh(values: { agents?: string; profile?: string; 'replace-legacy': boolean; json: boolean }): Promise<number> {
+  const result = await refreshProfiles(readAgents(values.agents), { replaceLegacy: values['replace-legacy'], ...(values.profile !== undefined ? { profile: values.profile } : {}) })
+  if (values.json) writeJson(successEnvelope(SCHEMA_VERSION, 'setup', { refresh: true, ...result }))
+  else {
+    out(`- rendered ${result.agents.length} agents into ${result.marketplace} (${result.version})`)
+    printInvalid(result.invalidAgents)
+    for (const profile of result.profiles) {
+      out(`- profile ${profile.profile}${profile.builtin ? ' (builtin)' : ''}: ${profile.agents.join(', ') || 'no agents'}`)
+      printSteps(profile.steps)
+    }
+  }
+  return result.profiles.some((profile) => profile.steps.some((step) => step.state === 'failed')) ? 1 : 0
+}
+
 async function setup(argv: string[]): Promise<number> {
-  const { values } = parseArgs({ args: argv, options: { agents: { type: 'string' }, 'replace-legacy': { type: 'boolean', default: false }, json: { type: 'boolean', default: false } } })
+  const { values } = parseArgs({
+    args: argv,
+    options: { agents: { type: 'string' }, refresh: { type: 'boolean', default: false }, profile: { type: 'string' }, 'replace-legacy': { type: 'boolean', default: false }, json: { type: 'boolean', default: false } },
+  })
+  if (values.refresh) return refresh(values)
+  if (values.profile !== undefined) throw new UsageError('--profile only applies with --refresh.')
   const { manifest, steps } = await setupTool(readAgents(values.agents), { replaceLegacy: values['replace-legacy'] })
   if (values.json) writeJson(successEnvelope(SCHEMA_VERSION, 'setup', { manifest, steps }))
   else {
@@ -119,9 +145,12 @@ async function geminiHook(argv: readonly string[]): Promise<number> {
   return 0
 }
 
+const DOMAIN_ERRORS = new Set(['SettingsError', 'ProfileError'])
+
 function errorCode(error: unknown): string {
   if (error instanceof UsageError) return 'USAGE'
   const code = error instanceof Error && 'code' in error ? String(error.code) : ''
+  if (error instanceof Error && DOMAIN_ERRORS.has(error.name) && code.length > 0) return code
   return code.startsWith('ERR_PARSE_ARGS') ? 'USAGE' : 'UNEXPECTED'
 }
 
