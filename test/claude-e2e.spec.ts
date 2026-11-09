@@ -117,7 +117,7 @@ test('the real claude binary follows settings: disabled roles leave the installe
   assert.match(await readFile(path.join(plugin?.installPath ?? '', 'agents', 'developer.md'), 'utf8'), /^maxTurns: 7$/m)
 })
 
-test('the real claude binary migrates from an older local marketplace named nursery and keeps the user text around the rules block', { skip: SKIP, timeout: TIMEOUT * 2 }, async (t) => {
+test('the real claude binary leaves a foreign local marketplace named nursery alone and still refreshes the rules block', { skip: SKIP, timeout: TIMEOUT * 2 }, async (t) => {
   const { home, env } = await sandbox(t)
   const legacy = await sandbox(t)
   await setSetting('agents.maxParallel', 3, legacy.ctx)
@@ -131,13 +131,11 @@ test('the real claude binary migrates from an older local marketplace named nurs
 
   const result = refresh(env)
   assert.deepEqual(result.profiles.flatMap((entry) => entry.steps).filter((step) => step.state === 'failed'), [])
-  assert.ok(result.profiles[0]?.steps.some((step) => step.item === 'marketplace nursery' && step.state === 'removed'))
+  assert.ok(result.profiles[0]?.steps.some((step) => step.item === 'marketplace nursery' && step.state === 'skipped' && step.detail.includes(old.marketplace)))
   const registered = marketplaces(env)
   assert.equal(registered.length, 1)
-  assert.equal(realpathSync(registered[0]?.path ?? ''), realpathSync(result.marketplace))
-  const plugin = nursery(env)
-  assert.equal(plugin?.version, result.version)
-  assert.equal(realpathSync(plugin?.readFromFolder ?? ''), realpathSync(result.marketplace))
+  assert.equal(realpathSync(registered[0]?.path ?? ''), realpathSync(old.marketplace))
+  assert.equal(nursery(env)?.version, old.version)
   const text = await readFile(memory, 'utf8')
   assert.equal(text.match(/<!-- kit:nursery:begin -->/g)?.length, 1)
   assert.match(text, /^# Mine\n\nkeep this\n/)
@@ -213,7 +211,7 @@ test('nursery build --check on a source edit names the generated agents that dep
   assert.ok(!stale.stdout.includes('agents/developer'), stale.stdout)
 })
 
-test('an orphan generated agent reported by build --check is removed by the build the message tells you to run', { todo: 'bug: writeAgents never deletes files without a source, so build --check keeps failing with "Run: pnpm build:agents"' }, async (t) => {
+test('an orphan generated agent reported by build --check is removed by the build the message tells you to run', async (t) => {
   const { copy, run } = await buildCopy(t)
   await writeFile(path.join(copy, 'subagents', 'orphan.md'), 'orphan\n')
   assert.equal(run('--check').status, 1)

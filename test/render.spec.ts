@@ -1,18 +1,18 @@
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
 import { existsSync } from 'node:fs'
-import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { cp, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { test } from 'node:test'
 import { agents } from '@kikedealba/kit'
-import { platformContext } from '@kikedealba/kit/platform'
-import { setSetting, userAgentsDir } from '@kikedealba/kit/settings'
+import { dataHome, platformContext } from '@kikedealba/kit/platform'
+import { setSetting, settingsPath, userAgentsDir } from '@kikedealba/kit/settings'
 import { AGENTS_DIR } from '../src/build.ts'
 import { applyOverrides, marketplaceDir, planNursery, renderNursery } from '../src/render.ts'
 import { installAgents, uninstallAgents } from '../src/setup.ts'
-import { READ_ONLY_ROLES } from '../src/templates.ts'
+import { READ_ONLY_ROLES, renderTemplate } from '../src/templates.ts'
 import { validateUserAgent } from '../src/user-agents.ts'
 import { VERSION } from '../src/version.ts'
 
@@ -59,7 +59,7 @@ async function writeUserAgent(ctx: ReturnType<typeof platformContext>, name: str
 test('the default render matches the committed claude agents and builds a local marketplace', async (t) => {
   const { ctx } = await sandbox(t)
   const rendered = await renderNursery(ctx)
-  assert.equal(rendered.marketplace, path.join(ctx.home, '.local', 'share', 'kikedealba', 'nursery', 'marketplace'))
+  assert.equal(rendered.marketplace, path.join(dataHome(ctx), 'kikedealba', 'nursery', 'marketplace'))
   assert.equal(rendered.marketplace, marketplaceDir(ctx))
   assert.equal(rendered.agents.length, 10)
   assert.deepEqual(rendered.unsupported, [])
@@ -182,7 +182,7 @@ test('validateUserAgent checks name, description, tools, model, effort, maxTurns
   const bad = validateUserAgent('Bad.md', '---\nname: Bad\nmodel: GPT 5\neffort: extreme\nmaxTurns: 900\n---\nbody\n')
   assert.equal(bad.ok, false)
   const joined = bad.errors.join(' | ')
-  for (const pattern of [/name must match/, /description is required/, /model must match/, /effort must be one of/, /maxTurns must be an integer from 1 to 500/]) assert.match(joined, pattern)
+  for (const pattern of [/name must match/, /description is required/, /model: invalid value for model/, /effort: invalid value for effort: must be one of/, /maxTurns: invalid value for maxTurns: must be at most 500/]) assert.match(joined, pattern)
 })
 
 test('disabling a role or deleting a user agent removes it from opencode and codex on the next setup', async (t) => {
@@ -290,4 +290,99 @@ test('nursery list --json shows user agents, disabled roles, overrides and inval
   assert.equal(byName.get('sre')?.enabled, false)
   assert.equal(byName.get('sre')?.source, 'nursery')
   assert.deepEqual(data.invalidAgents.map((agent) => agent.name), ['roto'])
+})
+
+test('user agent frontmatter is whitelisted, rebuilt and quoted safely', async (t) => {
+  const { ctx } = await sandbox(t)
+  await writeUserAgent(ctx, 'colon', '---\nname: colon\ndescription: Revisa SQL: bloqueos, índices\ntools: Read\nsource: den\ncreatedAt: 2026-11-08T17:00:00.000Z\n---\nBody\n')
+  await writeUserAgent(ctx, 'extra', '---\nname: extra\ndescription: d\npermissionMode: bypass\n---\nBody\n')
+  await writeUserAgent(ctx, 'maxparallel', '---\nname: maxparallel\ndescription: d\n---\nBody\n')
+  await writeUserAgent(ctx, 'nested', '---\nname: nested\ndescription: d\n  continued: x\n---\nBody\n')
+  const rendered = await renderNursery(ctx)
+  assert.deepEqual(rendered.userAgents, ['colon'])
+  const claude = await readFile(path.join(rendered.marketplace, 'agents', 'colon.md'), 'utf8')
+  assert.ok(claude.startsWith("---\nname: colon\ndescription: 'Revisa SQL: bloqueos, índices'\ntools: Read\n---\nBody"), claude)
+  assert.equal(agents.parseFrontmatter(claude).attributes['description'], 'Revisa SQL: bloqueos, índices')
+  const errors = Object.fromEntries(rendered.invalidAgents.map((agent) => [agent.name, agent.errors.join(' | ')]))
+  assert.match(errors['extra'] ?? '', /unknown frontmatter key "permissionMode"/)
+  assert.match(errors['maxparallel'] ?? '', /reserved by the agents settings/)
+  assert.match(errors['nested'] ?? '', /unsupported frontmatter line/)
+})
+
+test('an agent with no tool that exists in antigravity is skipped there only', async (t) => {
+  const { ctx, homes, options } = await sandbox(t)
+  await writeUserAgent(ctx, 'skiller', '---\nname: skiller\ndescription: Uses skills only.\ntools: Skill\n---\nBody\n')
+  const plugins = path.join(homes.antigravity, 'plugins')
+  const exec = async (_command: string, args: readonly string[]) => {
+    if (args[1] === 'list') return '[]'
+    if (args[1] === 'validate') return '{"ok":true}'
+    if (args[1] === 'install' && args[2]) {
+      await mkdir(plugins, { recursive: true })
+      await cp(args[2], path.join(plugins, 'nursery'), { recursive: true })
+    }
+    return ''
+  }
+  const steps = await installAgents(['antigravity', 'opencode'], { ...options, locate: async (command: string) => (command === 'agy' ? '/bin/agy' : null), exec })
+  assert.deepEqual(steps.filter((step) => step.state === 'failed'), [])
+  assert.ok(steps.some((step) => step.agent === 'antigravity' && step.item === 'subagent skiller' && step.state === 'skipped' && /no tool that exists in antigravity/.test(step.detail)))
+  assert.ok(existsSync(path.join(plugins, 'nursery', 'agents', 'developer.md')))
+  assert.ok(!existsSync(path.join(plugins, 'nursery', 'agents', 'skiller.md')))
+  assert.ok(existsSync(path.join(homes.opencode, 'agents', 'skiller.md')))
+})
+
+test('migrating from the github marketplace keeps a disabled plugin disabled', async (t) => {
+  const { options } = await sandbox(t)
+  const claude = fakeClaude([{ name: 'nursery', source: 'github', repo: 'KikeDeAlba/nursery' }])
+  const exec = async (command: string, args: readonly string[]) => (args.join(' ') === 'plugin list --json' && !claude.calls.some((call) => call.startsWith('plugin marketplace remove')) ? JSON.stringify([{ id: 'nursery@nursery', scope: 'user', enabled: false }]) : claude.exec(command, args))
+  const steps = await installAgents(['claude'], { ...options, locate: claude.locate, exec })
+  assert.deepEqual(steps.filter((step) => step.state === 'failed'), [])
+  assert.equal(claude.calls.filter((call) => !call.endsWith('--json')).at(-1), 'plugin disable nursery@nursery --scope user')
+})
+
+test('the plugin step reports unchanged and runs nothing when the installed version matches the render', async (t) => {
+  const { ctx, options } = await sandbox(t)
+  const rendered = await renderNursery(ctx)
+  const calls: string[] = []
+  const exec = async (_command: string, args: readonly string[]) => {
+    calls.push(args.join(' '))
+    if (args.join(' ') === 'plugin marketplace list --json') return JSON.stringify([null, { name: 'nursery', source: 'directory', path: rendered.marketplace }])
+    if (args.join(' ') === 'plugin list --json') return JSON.stringify([{ id: 'nursery@nursery', scope: 'user', version: rendered.version, enabled: true }])
+    return ''
+  }
+  const steps = await installAgents(['claude'], { ...options, rendered, locate: async () => '/bin/claude', exec })
+  const plugin = steps.find((step) => step.item === 'plugin nursery@nursery')
+  assert.equal(plugin?.state, 'present')
+  assert.match(plugin?.detail ?? '', /unchanged/)
+  assert.deepEqual(calls.filter((call) => !call.endsWith('--json')), [])
+})
+
+test('renders run under a lock and leave no staging directories behind', async (t) => {
+  const { ctx } = await sandbox(t)
+  const results = await Promise.all([renderNursery(ctx), renderNursery(ctx), renderNursery(ctx)])
+  assert.equal(new Set(results.map((result) => result.version)).size, 1)
+  const root = path.dirname(results[0]?.marketplace ?? '')
+  assert.deepEqual((await readdir(root)).sort(), ['marketplace', 'rendered'])
+  assert.equal((await readdir(path.join(root, 'marketplace', 'agents'))).length, 10)
+})
+
+test('setup and list fall back to the defaults with a warning when settings.json is corrupt', async (t) => {
+  const { ctx } = await sandbox(t)
+  await mkdir(path.dirname(settingsPath(ctx)), { recursive: true })
+  await writeFile(settingsPath(ctx), '{ nope')
+  const env = { ...process.env, ...ctx.env, PATH: process.env['PATH'] }
+  const list = spawnSync(process.execPath, [BIN, 'list', '--json'], { encoding: 'utf8', env })
+  assert.equal(list.status, 0, list.stdout + list.stderr)
+  const listed = JSON.parse(list.stdout) as { data: { agents: unknown[]; warnings: string[] } }
+  assert.equal(listed.data.agents.length, 10)
+  assert.match(listed.data.warnings.join('\n'), /using the default settings/)
+  const setup = spawnSync(process.execPath, [BIN, 'setup', '--agents', 'codex', '--json'], { encoding: 'utf8', env: { ...env, HOME: ctx.home } })
+  assert.equal(setup.status, 0, setup.stdout + setup.stderr)
+  assert.match((JSON.parse(setup.stdout) as { data: { warnings: string[] } }).data.warnings.join('\n'), /using the default settings/)
+})
+
+test('maxParallel given as a padded string is trimmed by kit before it reaches the rules', async (t) => {
+  const { ctx } = await sandbox(t)
+  await setSetting('agents.maxParallel', ' 4 ', ctx)
+  assert.match(await readFile((await renderNursery(ctx)).rulesFile, 'utf8'), /máximo 4 agentes/)
+  assert.throws(() => renderTemplate('{{ agents.maxParallel }}'), /placeholders cannot contain spaces/)
 })

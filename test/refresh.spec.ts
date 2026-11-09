@@ -11,6 +11,7 @@ import { addProfile } from '@kikedealba/kit/profiles'
 import { setSetting } from '@kikedealba/kit/settings'
 import { refreshProfiles } from '../src/refresh.ts'
 import { marketplaceDir } from '../src/render.ts'
+import { uninstallTool } from '../src/setup.ts'
 
 const BIN = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'src', 'bin', 'nursery.ts')
 
@@ -107,4 +108,37 @@ test('a corrupt settings file makes setup --refresh fail with SETTINGS_INVALID',
   const envelope = JSON.parse(run.stdout.trim()) as { ok: boolean; error: { code: string } }
   assert.equal(envelope.ok, false)
   assert.equal(envelope.error.code, 'SETTINGS_INVALID')
+})
+
+test('--agents detected in a non-builtin profile looks for binaries, not for the profile directories', async (t) => {
+  const { ctx } = await sandbox(t)
+  const { profile } = await addProfile('trabajo', ctx)
+  assert.ok(existsSync(profile.codex ?? ''))
+  const claude = recorder()
+  const result = await refreshProfiles('detected', { ctx, locate: claude.locate, exec: claude.exec, profile: 'trabajo' })
+  assert.deepEqual(result.profiles.map((entry) => entry.agents), [['claude']])
+})
+
+test('uninstall removes the plugin and the rules from every profile and deletes the rendered data', async (t) => {
+  const { home, ctx } = await sandbox(t)
+  const { profile } = await addProfile('trabajo', ctx)
+  const calls: string[] = []
+  const locate = async (command: string) => (command === 'claude' ? '/bin/claude' : null)
+  const exec = async (_command: string, args: readonly string[]) => {
+    calls.push(args.join(' '))
+    if (args.join(' ') === 'plugin list --json') return JSON.stringify([{ id: 'nursery@nursery', scope: 'user' }])
+    if (args.join(' ') === 'plugin marketplace list --json') return JSON.stringify([{ name: 'nursery', source: 'directory', path: marketplaceDir(ctx) }])
+    return ''
+  }
+  await refreshProfiles(['claude', 'codex'], { ctx, locate, exec })
+  assert.ok(existsSync(path.join(profile.codex ?? '', 'agents', 'developer.toml')))
+  calls.length = 0
+  const result = await uninstallTool({ ctx, locate, exec })
+  assert.equal(calls.filter((call) => call === 'plugin uninstall nursery@nursery --scope user').length, 2)
+  assert.equal(calls.filter((call) => call === 'plugin marketplace remove nursery').length, 2)
+  assert.ok(!existsSync(path.join(profile.codex ?? '', 'agents', 'developer.toml')))
+  assert.ok(!existsSync(path.join(home, '.codex', 'agents', 'developer.toml')))
+  assert.doesNotMatch(await readFile(path.join(profile.claude ?? '', 'CLAUDE.md'), 'utf8'), /kit:nursery/)
+  assert.ok(!existsSync(path.dirname(marketplaceDir(ctx))))
+  assert.deepEqual(result.steps.filter((step) => step.state === 'failed'), [])
 })

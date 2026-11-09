@@ -63,13 +63,16 @@ function fakeClaude(marketplaces: { name: string; source: string; path?: string;
 
 const changes = (calls: string[]): string[] => calls.filter((call) => !call.endsWith('--json'))
 
-test('an old local checkout registered as the nursery marketplace is swapped for the rendered one', async (t) => {
+test('a local nursery marketplace that is not the rendered one is left alone with a warning', async (t) => {
   const { ctx, options } = await sandbox(t)
   const claude = fakeClaude([{ name: 'nursery', source: 'directory', path: '/old/checkout/nursery' }], { installed: true })
   const steps = await installAgents(['claude'], { ...options, locate: claude.locate, exec: claude.exec })
   assert.deepEqual(steps.filter((step) => step.state === 'failed'), [])
-  assert.deepEqual(changes(claude.calls).slice(0, 2), ['plugin marketplace remove nursery', `plugin marketplace add ${marketplaceDir(ctx)}`])
-  assert.ok(steps.some((step) => step.item === 'marketplace nursery' && step.state === 'removed' && step.detail.includes('/old/checkout/nursery')))
+  assert.deepEqual(changes(claude.calls), [])
+  const warning = steps.find((step) => step.item === 'marketplace nursery')
+  assert.equal(warning?.state, 'skipped')
+  assert.ok(warning?.detail.includes('/old/checkout/nursery') && warning.detail.includes(marketplaceDir(ctx)), warning?.detail)
+  assert.ok(steps.some((step) => step.item === 'memory'))
 })
 
 test('a marketplace that already points at the rendered folder is left alone, even with a trailing slash or a relative detour', async (t) => {
@@ -150,7 +153,7 @@ test('an existing kit:nursery block with old rules is replaced in place, keeping
   assert.match(text, /after\n$/)
 })
 
-test('a half-written kit:nursery block (begin without end) is not silently doubled', { todo: 'bug (kit memory block): a begin marker without end is kept and a second complete block is appended, leaving two begin markers' }, async (t) => {
+test('a half-written kit:nursery block (begin without end) is not silently doubled', async (t) => {
   const { homes, options } = await sandbox(t)
   const memory = path.join(homes.claude, 'CLAUDE.md')
   await mkdir(homes.claude, { recursive: true })
@@ -175,7 +178,7 @@ test('the plugin is updated, not reinstalled, when a setting changes the rendere
   assert.deepEqual(changes(claude.calls), ['plugin marketplace update nursery', 'plugin update nursery@nursery --scope user'])
 })
 
-test('a null entry in the marketplace list does not crash the migration', { todo: 'bug: prepareClaudeMarketplace reads (item).name on a null entry and throws TypeError' }, async (t) => {
+test('a null entry in the marketplace list does not crash the migration', async (t) => {
   const { ctx, options } = await sandbox(t)
   const rendered = await renderNursery(ctx)
   const claude = fakeClaude([], { listOutput: '[null,{"name":"nursery","source":"github","repo":"a/b"}]' })

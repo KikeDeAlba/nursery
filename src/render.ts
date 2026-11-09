@@ -1,13 +1,14 @@
-import { createHash } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { existsSync } from 'node:fs'
-import { cp, mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { cp, mkdir, readdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { agents } from '@kikedealba/kit'
+import { withFileLock } from '@kikedealba/kit/atomic'
 import { dataHome, platformContext, type PlatformContext } from '@kikedealba/kit/platform'
-import { NURSERY_ROLES } from '@kikedealba/kit/settings'
+import { NURSERY_ROLES, SettingsError } from '@kikedealba/kit/settings'
 import { SUBAGENTS_DIR, TEMPLATE_SOURCES, agentNames, loadFragments } from './build.ts'
 import { OVERRIDE_FIELDS, loadConfig, type AgentOverrides, type NurseryConfig, type OverrideField } from './config.ts'
-import { renderTemplate } from './templates.ts'
+import { DEFAULT_TEMPLATE_CONFIG, renderTemplate } from './templates.ts'
 import { loadUserAgents, type InvalidUserAgent } from './user-agents.ts'
 import { PACKAGE_ROOT, VERSION } from './version.ts'
 
@@ -27,6 +28,18 @@ const PLUGIN_SOURCES = ['hooks', 'types'] as const
 const DROPPED_FIELDS = ['source', 'createdAt']
 const PLUGIN_MANIFEST = path.join(PACKAGE_ROOT, '.claude-plugin', 'plugin.json')
 const MARKETPLACE_MANIFEST = path.join(PACKAGE_ROOT, '.claude-plugin', 'marketplace.json')
+
+export const ANTIGRAVITY_TOOL_NAMES: readonly string[] = ['Read', 'Grep', 'Glob', 'LS', 'Bash', 'Edit', 'MultiEdit', 'Write', 'WebFetch', 'WebSearch']
+
+export interface Excluded {
+  agent: string
+  harness: RenderHarness
+  detail: string
+}
+
+export interface PlanOptions {
+  strict?: boolean
+}
 
 export interface Unsupported {
   agent: string
@@ -54,6 +67,8 @@ export interface NurseryPlan {
   agents: PlannedAgent[]
   invalidAgents: InvalidUserAgent[]
   unsupported: Unsupported[]
+  excluded: Excluded[]
+  warnings: string[]
 }
 
 export interface RenderedNursery {
@@ -70,6 +85,8 @@ export interface RenderedNursery {
   userAgents: string[]
   invalidAgents: InvalidUserAgent[]
   unsupported: Unsupported[]
+  excluded: Excluded[]
+  warnings: string[]
   stale: string[]
 }
 
@@ -146,11 +163,31 @@ function describe(name: string, content: string): Omit<PlannedAgent, 'name' | 's
   return { description: subagent.description, model: subagent.model, effort: subagent.effort, maxTurns: subagent.maxTurns, tools: subagent.tools, readOnly: isReadOnly(subagent.tools) }
 }
 
-export async function planNursery(ctx: PlatformContext = platformContext()): Promise<NurseryPlan> {
+function defaultConfig(userAgents: readonly string[]): NurseryConfig {
+  return { ...DEFAULT_TEMPLATE_CONFIG, enabled: [...NURSERY_ROLES, ...userAgents], overrides: {} }
+}
+
+function excludedFor(agent: PlannedAgent): Excluded[] {
+  const tools = agent.tools
+  if (tools === null || tools.length === 0 || tools.includes('*')) return []
+  if (tools.some((tool) => ANTIGRAVITY_TOOL_NAMES.includes(tool))) return []
+  return [{ agent: agent.name, harness: 'antigravity', detail: `subagent ${agent.name} has no tool that exists in antigravity (${tools.join(', ')}); it was not installed there` }]
+}
+
+export async function planNursery(ctx: PlatformContext = platformContext(), options: PlanOptions = {}): Promise<NurseryPlan> {
   const fragments = await loadFragments()
   const builtin = await Promise.all((await agentNames(SUBAGENTS_DIR)).map(async (name) => ({ name, content: await readFile(path.join(SUBAGENTS_DIR, `${name}.md`), 'utf8') })))
   const users = await loadUserAgents(fragments, ctx)
-  const config = await loadConfig(users.valid.map((agent) => agent.name), ctx)
+  const userNames = users.valid.map((agent) => agent.name)
+  const warnings: string[] = []
+  let config: NurseryConfig
+  try {
+    config = await loadConfig(userNames, ctx)
+  } catch (error) {
+    if (options.strict || !(error instanceof SettingsError) || error.code !== 'SETTINGS_INVALID') throw error
+    warnings.push(`${error.message}; using the default settings`)
+    config = defaultConfig(userNames)
+  }
   const enabled = new Set(config.enabled)
   const unsupported: Unsupported[] = []
   const sources = [
@@ -171,65 +208,87 @@ export async function planNursery(ctx: PlatformContext = platformContext()): Pro
     return { name: agent.name, source: agent.source, enabled: isEnabled, content, file: agent.file, ...describe(agent.name, content) }
   })
   const readOnly = new Set(planned.filter((agent) => agent.readOnly).map((agent) => agent.name))
-  return { config: { ...config, readOnly: config.enabled.filter((name) => readOnly.has(name)) }, agents: planned, invalidAgents: users.invalid, unsupported }
+  const excluded = planned.filter((agent) => agent.enabled).flatMap(excludedFor)
+  return { config: { ...config, readOnly: config.enabled.filter((name) => readOnly.has(name)) }, agents: planned, invalidAgents: users.invalid, unsupported, excluded, warnings }
 }
 
 async function template(name: keyof typeof TEMPLATE_SOURCES, config: NurseryConfig): Promise<string> {
   return renderTemplate(await readFile(TEMPLATE_SOURCES[name], 'utf8'), config)
 }
 
-export async function renderNursery(ctx: PlatformContext = platformContext()): Promise<RenderedNursery> {
-  const plan = await planNursery(ctx)
+async function swapDir(source: string, destination: string): Promise<void> {
+  const old = `${destination}.old-${randomUUID()}`
+  const had = existsSync(destination)
+  if (had) await rename(destination, old)
+  try {
+    await rename(source, destination)
+  } catch (error) {
+    if (had) await rename(old, destination).catch(() => undefined)
+    throw error
+  }
+  if (had) await rm(old, { recursive: true, force: true })
+}
+
+export async function renderNursery(ctx: PlatformContext = platformContext(), options: PlanOptions = {}): Promise<RenderedNursery> {
+  const root = nurseryDataDir(ctx)
+  await mkdir(root, { recursive: true })
+  return withFileLock(path.join(root, 'render'), () => renderLocked(ctx, options))
+}
+
+async function renderLocked(ctx: PlatformContext, options: PlanOptions): Promise<RenderedNursery> {
+  const plan = await planNursery(ctx, options)
   const { config } = plan
   const finals = plan.agents.filter((agent) => agent.enabled)
   const enabled = new Set(finals.map((agent) => agent.name))
   const root = nurseryDataDir(ctx)
   const marketplace = marketplaceDir(ctx)
   const rendered = renderedDir(ctx)
-  const subagentsDir = path.join(rendered, 'subagents')
-  const previous = await markdownNames(subagentsDir)
+  const previous = await markdownNames(path.join(rendered, 'subagents'))
+  const staging = path.join(root, `.render-${randomUUID()}`)
+  const stagedRendered = path.join(staging, 'rendered')
+  const stagedMarketplace = path.join(staging, 'marketplace')
+  try {
+    for (const agent of finals) await writeText(path.join(stagedRendered, 'subagents', `${agent.name}.md`), agent.content)
+    const skill = await template('skill', config)
+    await writeText(path.join(stagedRendered, 'RULES.md'), await template('rules', config))
+    await writeText(path.join(stagedRendered, 'antigravity.md'), await template('antigravity', config))
+    await writeText(path.join(stagedRendered, 'gemini-plan.toml'), await template('policy', config))
+    await writeText(path.join(stagedRendered, 'skills', 'nursery', 'SKILL.md'), skill)
 
-  await rm(rendered, { recursive: true, force: true })
-  for (const agent of finals) await writeText(path.join(subagentsDir, `${agent.name}.md`), agent.content)
-  const rulesFile = path.join(rendered, 'RULES.md')
-  const antigravityRulesFile = path.join(rendered, 'antigravity.md')
-  const policyFile = path.join(rendered, 'gemini-plan.toml')
-  const skillDir = path.join(rendered, 'skills', 'nursery')
-  const skill = await template('skill', config)
-  await writeText(rulesFile, await template('rules', config))
-  await writeText(antigravityRulesFile, await template('antigravity', config))
-  await writeText(policyFile, await template('policy', config))
-  await writeText(path.join(skillDir, 'SKILL.md'), skill)
+    for (const agent of finals) await writeText(path.join(stagedMarketplace, 'agents', `${agent.name}.md`), agents.renderForAgent(agent.content, 'claude'))
+    await writeText(path.join(stagedMarketplace, 'skills', 'nursery', 'SKILL.md'), skill)
+    for (const dir of PLUGIN_SOURCES) {
+      await cp(path.join(PACKAGE_ROOT, dir), path.join(stagedMarketplace, dir), { recursive: true, filter: (source) => !source.endsWith('.test.ts') })
+    }
+    const version = `${VERSION}+${await hashTree(stagedMarketplace)}`
+    const plugin = { ...(JSON.parse(await readFile(PLUGIN_MANIFEST, 'utf8')) as Record<string, unknown>), version }
+    const catalog = JSON.parse(await readFile(MARKETPLACE_MANIFEST, 'utf8')) as { plugins?: Record<string, unknown>[] } & Record<string, unknown>
+    catalog.plugins = (catalog.plugins ?? []).map((entry) => (entry['name'] === 'nursery' ? { ...entry, source: './', version } : entry))
+    await writeText(path.join(stagedMarketplace, '.claude-plugin', 'plugin.json'), `${JSON.stringify(plugin, null, 2)}\n`)
+    await writeText(path.join(stagedMarketplace, '.claude-plugin', 'marketplace.json'), `${JSON.stringify(catalog, null, 2)}\n`)
+    await swapDir(stagedRendered, rendered)
+    await swapDir(stagedMarketplace, marketplace)
 
-  await rm(marketplace, { recursive: true, force: true })
-  for (const agent of finals) await writeText(path.join(marketplace, 'agents', `${agent.name}.md`), agents.renderForAgent(agent.content, 'claude'))
-  await writeText(path.join(marketplace, 'skills', 'nursery', 'SKILL.md'), skill)
-  for (const dir of PLUGIN_SOURCES) {
-    await cp(path.join(PACKAGE_ROOT, dir), path.join(marketplace, dir), { recursive: true, filter: (source) => !source.endsWith('.test.ts') })
-  }
-  const version = `${VERSION}+${await hashTree(marketplace)}`
-  const plugin = { ...(JSON.parse(await readFile(PLUGIN_MANIFEST, 'utf8')) as Record<string, unknown>), version }
-  const catalog = JSON.parse(await readFile(MARKETPLACE_MANIFEST, 'utf8')) as { plugins?: Record<string, unknown>[] } & Record<string, unknown>
-  catalog.plugins = (catalog.plugins ?? []).map((entry) => (entry['name'] === 'nursery' ? { ...entry, source: './', version } : entry))
-  await writeText(path.join(marketplace, '.claude-plugin', 'plugin.json'), `${JSON.stringify(plugin, null, 2)}\n`)
-  await writeText(path.join(marketplace, '.claude-plugin', 'marketplace.json'), `${JSON.stringify(catalog, null, 2)}\n`)
-
-  const names = finals.map((agent) => agent.name)
-  const stale = [...new Set([...NURSERY_ROLES, ...previous])].filter((name) => !enabled.has(name))
-  return {
-    root,
-    policyFile,
-    marketplace,
-    rulesFile,
-    antigravityRulesFile,
-    skillDir,
-    subagentsDir,
-    version,
-    config,
-    agents: names,
-    userAgents: plan.agents.filter((agent) => agent.source === 'user').map((agent) => agent.name),
-    invalidAgents: plan.invalidAgents,
-    unsupported: plan.unsupported,
-    stale,
+    const stale = [...new Set([...NURSERY_ROLES, ...previous])].filter((name) => !enabled.has(name))
+    return {
+      root,
+      policyFile: path.join(rendered, 'gemini-plan.toml'),
+      marketplace,
+      rulesFile: path.join(rendered, 'RULES.md'),
+      antigravityRulesFile: path.join(rendered, 'antigravity.md'),
+      skillDir: path.join(rendered, 'skills', 'nursery'),
+      subagentsDir: path.join(rendered, 'subagents'),
+      version,
+      config,
+      agents: finals.map((agent) => agent.name),
+      userAgents: plan.agents.filter((agent) => agent.source === 'user').map((agent) => agent.name),
+      invalidAgents: plan.invalidAgents,
+      unsupported: plan.unsupported,
+      excluded: plan.excluded,
+      warnings: plan.warnings,
+      stale,
+    }
+  } finally {
+    await rm(staging, { recursive: true, force: true })
   }
 }

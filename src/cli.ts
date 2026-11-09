@@ -65,10 +65,12 @@ async function setup(argv: string[]): Promise<number> {
   })
   if (values.refresh) return refresh(values)
   if (values.profile !== undefined) throw new UsageError('--profile only applies with --refresh.')
-  const { manifest, steps } = await setupTool(readAgents(values.agents), { replaceLegacy: values['replace-legacy'] })
-  if (values.json) writeJson(successEnvelope(SCHEMA_VERSION, 'setup', { manifest, steps }))
+  const { manifest, steps, warnings, invalidAgents } = await setupTool(readAgents(values.agents), { replaceLegacy: values['replace-legacy'] })
+  if (values.json) writeJson(successEnvelope(SCHEMA_VERSION, 'setup', { manifest, steps, warnings, invalidAgents }))
   else {
     out(`- registered in ${manifest}`)
+    for (const warning of warnings) out(`! ${warning}`)
+    printInvalid(invalidAgents)
     printSteps(steps)
   }
   return steps.some((step) => step.state === 'failed') ? 1 : 0
@@ -107,8 +109,9 @@ async function list(argv: string[]): Promise<number> {
     description: agent.description,
     ...(agent.file !== null ? { file: agent.file } : {}),
   }))
-  if (values.json) writeJson(successEnvelope(SCHEMA_VERSION, 'list', { agents: rows, invalidAgents: plan.invalidAgents }))
+  if (values.json) writeJson(successEnvelope(SCHEMA_VERSION, 'list', { agents: rows, invalidAgents: plan.invalidAgents, warnings: plan.warnings }))
   else {
+    for (const warning of plan.warnings) out(`! ${warning}`)
     for (const row of rows) out(`${row.enabled ? ' ' : '-'} ${row.name.padEnd(14)} ${`${row.model}/${row.effort}`.padEnd(24)} ${row.source === 'user' ? '[user] ' : ''}${row.description}`)
     printInvalid(plan.invalidAgents)
   }

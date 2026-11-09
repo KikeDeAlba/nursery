@@ -4,10 +4,11 @@ import path from 'node:path'
 import { agents } from '@kikedealba/kit'
 import { platformContext, run, type PlatformContext } from '@kikedealba/kit/platform'
 import { defineManifest, registerTool, stableBin, unregisterTool, type ToolManifest } from '@kikedealba/kit/registry'
+import { envFor, listProfiles } from '@kikedealba/kit/profiles'
 import { NURSERY_ROLES } from '@kikedealba/kit/settings'
 import { RULES_FILE, TEMPLATE_SOURCES } from './build.ts'
 import { HOOK_EVENTS, type HookEventName } from './flow-types.ts'
-import { planNursery, renderNursery, renderedDir, type RenderedNursery } from './render.ts'
+import { marketplaceDir, nurseryDataDir, planNursery, renderNursery, renderedDir, type RenderedNursery } from './render.ts'
 import { renderTemplate } from './templates.ts'
 import { PACKAGE_ROOT, VERSION } from './version.ts'
 
@@ -224,30 +225,123 @@ function errorText(error: unknown): string {
   return error instanceof Error ? (error.message.split('\n')[0] ?? 'failed') : String(error)
 }
 
-export async function prepareClaudeMarketplace(rendered: RenderedNursery, options: agents.InstallOptions = {}): Promise<agents.Step[]> {
+interface ClaudeCli {
+  claude: string
+  exec: (command: string, args: readonly string[]) => Promise<void | string>
+}
+
+async function claudeCli(options: agents.InstallOptions): Promise<ClaudeCli | null> {
   const ctx = options.ctx ?? platformContext()
   const claude = await (options.locate ?? ((command: string) => agents.findAgentBinary('claude', { ctx })))('claude')
-  if (!claude) return []
+  if (!claude) return null
   const exec = options.exec ?? (async (command: string, args: readonly string[]) => (await run(command, args, { env: ctx.env, timeoutMs: 120_000 })).stdout)
-  let listed: unknown
+  return { claude, exec }
+}
+
+async function listJson(cli: ClaudeCli, args: readonly string[]): Promise<Record<string, unknown>[] | null> {
   try {
-    listed = JSON.parse(String((await exec(claude, ['plugin', 'marketplace', 'list', '--json'])) ?? ''))
+    const parsed: unknown = JSON.parse(String((await cli.exec(cli.claude, args)) ?? ''))
+    if (!Array.isArray(parsed)) return null
+    return parsed.filter((item): item is Record<string, unknown> => typeof item === 'object' && item !== null && !Array.isArray(item))
   } catch {
-    return []
+    return null
   }
-  if (!Array.isArray(listed)) return []
-  const entry = listed.find((item) => (item as { name?: unknown }).name === CLAUDE_PLUGIN.marketplaceName) as { source?: unknown; path?: unknown; repo?: unknown } | undefined
-  if (!entry) return []
-  const local = entry.source === 'directory' && typeof entry.path === 'string' && path.resolve(entry.path) === path.resolve(rendered.marketplace)
-  if (local) return []
-  const origin = typeof entry.repo === 'string' ? entry.repo : typeof entry.path === 'string' ? entry.path : String(entry.source ?? 'unknown')
+}
+
+function pluginId(): string {
+  return `${CLAUDE_PLUGIN.plugin}@${CLAUDE_PLUGIN.marketplaceName}`
+}
+
+async function installedPlugin(cli: ClaudeCli): Promise<Record<string, unknown> | null> {
+  return (await listJson(cli, ['plugin', 'list', '--json']))?.find((entry) => entry['id'] === pluginId() && (entry['scope'] === undefined || entry['scope'] === 'user')) ?? null
+}
+
+type MarketplaceState = 'absent' | 'local' | 'replaced' | 'foreign' | 'failed'
+
+interface MarketplacePreparation {
+  state: MarketplaceState
+  steps: agents.Step[]
+  wasDisabled: boolean
+}
+
+function samePath(left: string, right: string): boolean {
+  return path.resolve(left) === path.resolve(right)
+}
+
+async function prepareMarketplace(rendered: RenderedNursery, cli: ClaudeCli): Promise<MarketplacePreparation> {
+  const item = `marketplace ${CLAUDE_PLUGIN.marketplaceName}`
+  const listed = await listJson(cli, ['plugin', 'marketplace', 'list', '--json'])
+  const entry = listed?.find((candidate) => candidate['name'] === CLAUDE_PLUGIN.marketplaceName)
+  if (!entry) return { state: 'absent', steps: [], wasDisabled: false }
+  const directory = entry['source'] === 'directory' && typeof entry['path'] === 'string' ? entry['path'] : null
+  if (directory !== null && samePath(directory, rendered.marketplace)) return { state: 'local', steps: [], wasDisabled: false }
+  if (directory !== null) {
+    const detail = `marketplace nursery points to ${directory}, not to ${rendered.marketplace}; it was left alone and the plugin was not installed. Run: claude plugin marketplace remove nursery && nursery setup`
+    return { state: 'foreign', steps: [{ agent: 'claude', item, state: 'skipped', detail }], wasDisabled: false }
+  }
+  const wasDisabled = (await installedPlugin(cli))?.['enabled'] === false
+  const origin = typeof entry['repo'] === 'string' ? entry['repo'] : typeof entry['url'] === 'string' ? entry['url'] : String(entry['source'] ?? 'unknown')
+  try {
+    await cli.exec(cli.claude, ['plugin', 'marketplace', 'remove', CLAUDE_PLUGIN.marketplaceName])
+    return { state: 'replaced', steps: [{ agent: 'claude', item, state: 'removed', detail: `removed the marketplace from ${origin}; nursery now installs from ${rendered.marketplace}` }], wasDisabled }
+  } catch (error) {
+    return { state: 'failed', steps: [{ agent: 'claude', item, state: 'failed', detail: `claude plugin marketplace remove failed: ${errorText(error)}` }], wasDisabled }
+  }
+}
+
+export async function prepareClaudeMarketplace(rendered: RenderedNursery, options: agents.InstallOptions = {}): Promise<agents.Step[]> {
+  const cli = await claudeCli(options)
+  return cli ? (await prepareMarketplace(rendered, cli)).steps : []
+}
+
+async function installClaude(rendered: RenderedNursery, options: agents.InstallOptions): Promise<agents.Step[]> {
+  const cli = await claudeCli(options)
+  if (!cli) return agents.installClaudePlugin(claudePlugin(rendered), options)
+  const prepared = await prepareMarketplace(rendered, cli)
+  const steps = [...prepared.steps]
+  if (prepared.state === 'foreign' || prepared.state === 'failed') return steps
+  if (prepared.state === 'local') {
+    const current = await installedPlugin(cli)
+    if (current?.['version'] === rendered.version) {
+      steps.push({ agent: 'claude', item: `plugin ${pluginId()}`, state: 'present', detail: `plugin ${pluginId()} unchanged (${rendered.version})` })
+      return steps
+    }
+  }
+  const installed = await agents.installClaudePlugin(claudePlugin(rendered), options)
+  steps.push(...installed)
+  if (prepared.wasDisabled && !installed.some((step) => step.state === 'failed')) {
+    try {
+      await cli.exec(cli.claude, ['plugin', 'disable', pluginId(), '--scope', 'user'])
+      steps.push({ agent: 'claude', item: `plugin ${pluginId()}`, state: 'skipped', detail: `plugin ${pluginId()} was disabled before the migration and stays disabled` })
+    } catch (error) {
+      steps.push({ agent: 'claude', item: `plugin ${pluginId()}`, state: 'failed', detail: `could not disable ${pluginId()} again: ${errorText(error)}` })
+    }
+  }
+  return steps
+}
+
+async function removeLocalMarketplace(options: agents.InstallOptions): Promise<agents.Step[]> {
+  const cli = await claudeCli(options)
+  if (!cli) return []
+  const local = marketplaceDir(options.ctx)
+  const entry = (await listJson(cli, ['plugin', 'marketplace', 'list', '--json']))?.find((candidate) => candidate['name'] === CLAUDE_PLUGIN.marketplaceName)
+  if (!entry || entry['source'] !== 'directory' || typeof entry['path'] !== 'string' || !samePath(entry['path'], local)) return []
   const item = `marketplace ${CLAUDE_PLUGIN.marketplaceName}`
   try {
-    await exec(claude, ['plugin', 'marketplace', 'remove', CLAUDE_PLUGIN.marketplaceName])
-    return [{ agent: 'claude', item, state: 'removed', detail: `removed the marketplace from ${origin}; nursery now installs from ${rendered.marketplace}` }]
+    await cli.exec(cli.claude, ['plugin', 'marketplace', 'remove', CLAUDE_PLUGIN.marketplaceName])
+    return [{ agent: 'claude', item, state: 'removed', detail: `removed the local marketplace ${local}` }]
   } catch (error) {
     return [{ agent: 'claude', item, state: 'failed', detail: `claude plugin marketplace remove failed: ${errorText(error)}` }]
   }
+}
+
+function excludedSteps(rendered: RenderedNursery, targets: readonly MemoryAgent[]): agents.Step[] {
+  return rendered.excluded.filter((entry) => targets.includes(entry.harness)).map((entry) => ({ agent: entry.harness, item: `subagent ${entry.agent}`, state: 'skipped' as const, detail: entry.detail }))
+}
+
+function withoutExcluded(base: agents.AgentIntegration, rendered: RenderedNursery, harness: MemoryAgent): agents.AgentIntegration {
+  const skip = new Set(rendered.excluded.filter((entry) => entry.harness === harness).map((entry) => entry.agent))
+  return skip.size === 0 ? base : { ...base, subagents: (base.subagents ?? []).filter((subagent) => !skip.has(subagent.name)) }
 }
 
 function unsupportedSteps(rendered: RenderedNursery, targets: readonly MemoryAgent[]): agents.Step[] {
@@ -274,7 +368,7 @@ async function pruneSubagents(rendered: RenderedNursery, targets: readonly Memor
 export async function installAgents(selection: AgentSelection, options: SetupOptions = {}): Promise<agents.Step[]> {
   const targets = (await resolveSelection(selection, options)).filter((agent): agent is MemoryAgent => agent !== 'claude-desktop')
   const rendered = options.rendered ?? (await renderNursery(options.ctx))
-  const steps: agents.Step[] = unsupportedSteps(rendered, targets)
+  const steps: agents.Step[] = [...unsupportedSteps(rendered, targets), ...excludedSteps(rendered, targets)]
   const blocked = new Set<MemoryAgent>()
   const handled = new Map<string, agents.Step | null>()
   for (const agent of targets) {
@@ -287,41 +381,54 @@ export async function installAgents(selection: AgentSelection, options: SetupOpt
     if (legacy.state === 'skipped') blocked.add(agent)
   }
   if (targets.includes('claude')) {
-    const prepared = await prepareClaudeMarketplace(rendered, options)
-    steps.push(...prepared)
-    if (!prepared.some((step) => step.state === 'failed')) steps.push(...(await agents.installClaudePlugin(claudePlugin(rendered), options)))
+    steps.push(...(await installClaude(rendered, options)))
     if (!blocked.has('claude')) steps.push(...(await agents.installIntegration(memoryIntegration(rendered), { ...options, agents: ['claude'] })))
   }
-  const others = targets.filter((agent) => agent === 'opencode' || agent === 'codex' || agent === 'antigravity')
+  const others = targets.filter((agent) => agent === 'opencode' || agent === 'codex')
   if (others.length > 0) {
     steps.push(...(await installSplit(integration(rendered), others, blocked, options)))
     steps.push(...(await pruneSubagents(rendered, others, options)))
   }
+  if (targets.includes('antigravity')) steps.push(...(await installSplit(withoutExcluded(integration(rendered), rendered, 'antigravity'), ['antigravity'], blocked, options)))
   if (targets.includes('gemini')) steps.push(...(await installSplit(await geminiIntegration(rendered, options.ctx), ['gemini'], blocked, options)))
   if (targets.includes('gemini')) steps.push(await installGeminiPolicy(options, rendered.policyFile))
   return steps
 }
 
-export async function uninstallAgents(options: agents.InstallOptions = {}): Promise<agents.Step[]> {
+export interface UninstallOptions extends agents.InstallOptions {
+  harnesses?: readonly MemoryAgent[]
+}
+
+export async function uninstallAgents(options: UninstallOptions = {}): Promise<agents.Step[]> {
+  const wanted = new Set<MemoryAgent>(options.harnesses ?? MEMORY_AGENTS)
   const steps: agents.Step[] = []
-  steps.push(...(await agents.uninstallClaudePlugin(CLAUDE_PLUGIN, options)))
   const removal = await removalIntegration(options.ctx)
-  steps.push(...(await agents.uninstallIntegration({ tool: TOOL, version: VERSION, memory: RULES_FILE }, { ...options, agents: ['claude'] })))
-  steps.push(...(await agents.uninstallIntegration(removal, { ...options, agents: ['opencode', 'codex', 'antigravity'] })))
-  steps.push(...(await agents.uninstallIntegration(withGemini(removal, await geminiHooks(options.ctx)), { ...options, agents: ['gemini'] })))
-  const policy = await uninstallGeminiPolicy(options)
-  if (policy) steps.push(policy)
+  if (wanted.has('claude')) {
+    steps.push(...(await agents.uninstallClaudePlugin(CLAUDE_PLUGIN, options)))
+    steps.push(...(await removeLocalMarketplace(options)))
+    steps.push(...(await agents.uninstallIntegration({ tool: TOOL, version: VERSION, memory: RULES_FILE }, { ...options, agents: ['claude'] })))
+  }
+  const others = (['opencode', 'codex', 'antigravity'] as const).filter((agent) => wanted.has(agent))
+  if (others.length > 0) steps.push(...(await agents.uninstallIntegration(removal, { ...options, agents: others })))
+  if (wanted.has('gemini')) {
+    steps.push(...(await agents.uninstallIntegration(withGemini(removal, await geminiHooks(options.ctx)), { ...options, agents: ['gemini'] })))
+    const policy = await uninstallGeminiPolicy(options)
+    if (policy) steps.push(policy)
+  }
   return steps
 }
 
 export interface SetupResult {
   manifest: string
   steps: agents.Step[]
+  warnings: string[]
+  invalidAgents: RenderedNursery['invalidAgents']
 }
 
 export async function setupTool(selection: AgentSelection, options: SetupOptions = {}): Promise<SetupResult> {
   const manifestPath = await register(options.ctx)
-  return { manifest: manifestPath, steps: await installAgents(selection, options) }
+  const rendered = options.rendered ?? (await renderNursery(options.ctx))
+  return { manifest: manifestPath, steps: await installAgents(selection, { ...options, rendered }), warnings: rendered.warnings, invalidAgents: rendered.invalidAgents }
 }
 
 export async function currentRules(ctx?: PlatformContext): Promise<string> {
@@ -335,7 +442,15 @@ export interface UninstallResult {
 }
 
 export async function uninstallTool(options: agents.InstallOptions = {}): Promise<UninstallResult> {
-  const steps = await uninstallAgents(options)
+  const ctx = options.ctx ?? platformContext()
+  const profiles = await listProfiles(ctx).then((list) => list.profiles, () => null)
+  const steps: agents.Step[] = []
+  if (profiles === null) steps.push(...(await uninstallAgents(options)))
+  for (const profile of profiles ?? []) {
+    const scoped = { ...options, ctx: { ...ctx, env: envFor(profile, 'all', ctx.env) } }
+    steps.push(...(await uninstallAgents(profile.builtin ? scoped : { ...scoped, harnesses: ['claude', 'codex'] })))
+  }
+  await rm(nurseryDataDir(ctx), { recursive: true, force: true })
   return { unregistered: await unregister(options.ctx), steps }
 }
 
